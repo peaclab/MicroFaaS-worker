@@ -96,8 +96,9 @@ def load_generator(count):
         time.sleep(LOAD_GEN_PERIOD)
 
 if __name__ == "__main__":
+    # Host "" means bind to all interfaces
     # Port 0 means to select an arbitrary unused port
-    HOST, PORT = "localhost", 63302
+    HOST, PORT = "", 63302
     
     # Set up queues
     queues = {str(k):queue.Queue() for k in WORKERS}
@@ -119,8 +120,11 @@ if __name__ == "__main__":
         server_thread.start()
         print("Server loop running in thread:", server_thread.name)
 
-        client(ip, port, 2)
+        client(ip, port, 6)
         client(ip, port, 4)
         client(ip, port, 5)
+        
+        # Run server for an hour (TODO: hacky af)
+        time.sleep(3600)
 
         server.shutdown()
