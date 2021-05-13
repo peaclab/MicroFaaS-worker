@@ -5,6 +5,8 @@ import socketserver
 import queue
 import time
 import random
+import string
+import json
 
 # List of individual worker IDs
 # e.g., if the orchestrator is 192.168.1.1, and workers are 192.168.1.2-11, this should be range(2, 12) 
@@ -17,17 +19,46 @@ FUNC_EXEC_COUNT = 1000
 LOAD_GEN_PERIOD = 0.5
 
 # JSON payload to send when we want the worker to power down
-SHUTDOWN_PAYLOAD = "shutdown_dummy_str"
+SHUTDOWN_PAYLOAD = b"{\"i_id\": \"PWROFF\", \"f_id\": \"shutdown\", \"f_args\": {}}\n"
 
-class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
+# Socket timeout
+SOCK_TIMEOUT = 60
+
+# Supported workload functions and sample inputs. 
+# Make sure COMMANDS.keys() matches your workers' FUNCTIONS.keys()!
+random.seed("MicroFaaS", version=2) # Hardcode seed for reproducibility
+COMMANDS = {
+    "float_operations": [
+        {'n': random.randint(1, 1000000)} for _ in range(10)
+    ],
+    "cascading_sha256": [
+        { # data is 64 random chars, rounds is rand int upto 1 mil
+            'data': ''.join(random.choices(string.ascii_letters + string.digits, k=64)), 
+            'rounds': random.randint(1, 1000000)
+        } for _ in range(10)
+    ],
+    "cascading_md5": [
+        { # data is 64 random chars, rounds is rand int upto 1 mil
+            'data': ''.join(random.choices(string.ascii_letters + string.digits, k=64)),
+            'rounds': random.randint(1, 1000000)
+        } for _ in range(10)
+    ]
+}
+
+random.seed() # Reset seed to "truly" random
+
+class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
     def handle(self):
+        # Set the timeout for blocking socket operations
+        self.request.settimeout(SOCK_TIMEOUT)
     
         # First check if worker identified itself
         print("DEBUG: Incoming request from " + str(self.client_address[0]))
         try:
-            self.worker_id = int(self.rfile.readline().strip())
+            # If first few bytes can be casted to an int, assume it's an ID
+            self.worker_id = int(self.request.recv(4).strip())
         except ValueError:
-            # It didn't, so try to identify the worker by its IP address
+            # Otherwise try to identify the worker by its IP address
             try:
                 self.worker_id = int(self.client_address[0].split('.')[-1])
             except ValueError:
@@ -36,20 +67,17 @@ class ThreadedTCPRequestHandler(socketserver.StreamRequestHandler):
         
         # Send the worker the next item on the queue
         try:
-            self.wfile.write(queues[str(self.worker_id)].get_nowait().encode(encoding="ascii"))
+            self.request.sendall((queues[str(self.worker_id)].get_nowait() + '\n').encode(encoding="ascii"))
             print("DEBUG: Popped off queue " + str(self.worker_id))
         except queue.Empty:
             # This worker's queue is empty, so tell it to shutdown
-            self.wfile.write(SHUTDOWN_PAYLOAD)
+            self.request.sendall(SHUTDOWN_PAYLOAD)
             print("WARN: Worker with empty queue requested work")
             return
           
         # Now we wait for work to happen and results to come back
-        # TODO: Implement some sort of timeout here (probably using raw sockets)
-        
-        # self.rfile is a file-like object created by the handler;
-        # we can now use e.g. readline() instead of raw recv() calls
-        self.data = self.rfile.readline().strip()
+        # The socket timeout will limit how long we wait
+        self.data = self.request.recv(8192).strip()
 
         # Print results to console
         print("INFO: {} returned: {}".format(self.worker_id, self.data))
@@ -63,24 +91,24 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     pass
 
 
-def client(ip, port, client_id):
-    """
-    Dummy client
-    """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        # Connect
-        sock.connect((ip, port))
-        # Send client ID
-        sock.sendall(bytes(str(client_id) + "\n", "ascii"))
-        # Receive Job ID
-        job_id = str(sock.recv(1024), 'ascii')
-        print("CLIENT: Received: {}".format(job_id))
+# def client(ip, port, client_id):
+#     """
+#     Dummy client
+#     """
+#     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+#         # Connect
+#         sock.connect((ip, port))
+#         # Send client ID
+#         sock.sendall(bytes(str(client_id) + "\n", "ascii"))
+#         # Receive Job ID
+#         job_id = str(sock.recv(1024), 'ascii')
+#         print("CLIENT: Received: {}".format(job_id))
         
-        # Pretend to do some work
-        time.sleep(1)
+#         # Pretend to do some work
+#         time.sleep(1)
         
-        # Send a result
-        sock.sendall(bytes("dummy_{}_end_{}".format(client_id, random.randint(0,1000)), 'ascii'))
+#         # Send a result
+#         sock.sendall(bytes("dummy_{}_end_{}".format(client_id, random.randint(0,1000)), 'ascii'))
 
 
 def load_generator(count):
@@ -91,7 +119,17 @@ def load_generator(count):
     """
     while count > 0:
         for _, q in queues.items():
-            q.put_nowait("DUMMY_QUEUE_ITEM_"+str(random.randint(0,1000)))
+            f_id = random.choice(list(COMMANDS.keys()))
+            cmd = {
+                # Invocation ID
+                'i_id': ''.join(random.choices(string.ascii_letters + string.digits, k=6)),
+                # Function ID (one of COMMANDS.keys())
+                'f_id': f_id,
+                # Function arguments
+                'f_args': random.choice(COMMANDS[f_id]),
+            }
+            q.put_nowait(json.dumps(cmd))
+            #print(json.dumps(cmd))
             count -= 1
         time.sleep(LOAD_GEN_PERIOD)
 
@@ -120,9 +158,9 @@ if __name__ == "__main__":
         server_thread.start()
         print("Server loop running in thread:", server_thread.name)
 
-        client(ip, port, 6)
-        client(ip, port, 4)
-        client(ip, port, 5)
+        # client(ip, port, 6)
+        # client(ip, port, 4)
+        # client(ip, port, 5)
         
         # Run server for an hour (TODO: hacky af)
         time.sleep(3600)
