@@ -7,10 +7,28 @@ import time
 import random
 import string
 import json
+import Adafruit_BBIO.GPIO as GPIO
 
-# List of individual worker IDs
+# TCP Server Setup
+# Host "" means bind to all interfaces
+# Port 0 means to select an arbitrary unused port
+HOST, PORT = "", 63302
+
+# Mapping of worker IDs to GPIO lines
+# We assume the ID# also maps to the last octet of the worker's IP 
 # e.g., if the orchestrator is 192.168.1.1, and workers are 192.168.1.2-11, this should be range(2, 12) 
-WORKERS = range(2, 12)
+WORKERS = {
+    '2': "P9_41",
+    '3': "P8_7",
+    '4': "P8_8",
+    '5': "P8_9",
+    '6': "P8_10",
+    '7': "P8_11",
+    '8': "P8_12",
+    '9': "P8_14",
+    '10': "P8_15",
+    '11': "P8_16"
+}
 
 # How many total functions to run across all workers
 FUNC_EXEC_COUNT = 1000
@@ -44,8 +62,18 @@ COMMANDS = {
         } for _ in range(10)
     ]
 }
-
 random.seed() # Reset seed to "truly" random
+
+
+def power_up_worker(worker_id):
+    """
+    Power up a worker by pulsing its PWR_BUT line low for 500ms
+    """
+    GPIO.output(WORKERS[str(worker_id)], GPIO.LOW)
+    time.sleep(0.5)
+    GPIO.output(WORKERS[str(worker_id)], GPIO.HIGH)
+    return
+
 
 class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
     def handle(self):
@@ -83,6 +111,10 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         print("INFO: {} returned: {}".format(self.worker_id, self.data))
         
         # Worker should now shutdown on its own immediately
+        # Check if there's more work for it in its queue
+        if not queues[str(self.worker_id)].empty():
+            # Turn it back on to finish the work
+            power_up_worker(self.worker_id)
         return
 
 
@@ -118,7 +150,8 @@ def load_generator(count):
     Currently a stub that just gives every queue a function each period
     """
     while count > 0:
-        for _, q in queues.items():
+        for w_id, q in queues.items():
+            q_was_empty = q.empty()
             f_id = random.choice(list(COMMANDS.keys()))
             cmd = {
                 # Invocation ID
@@ -130,16 +163,24 @@ def load_generator(count):
             }
             q.put_nowait(json.dumps(cmd))
             #print(json.dumps(cmd))
+            if q_was_empty:
+                # This worker's queue was empty, meaning it probably isn't
+                # powered on right now. Now that it has work, power it up
+                power_up_worker(w_id)
+
             count -= 1
         time.sleep(LOAD_GEN_PERIOD)
 
 if __name__ == "__main__":
-    # Host "" means bind to all interfaces
-    # Port 0 means to select an arbitrary unused port
-    HOST, PORT = "", 63302
+
+
+    # Set up GPIO lines
+    for _, pin in WORKERS.items():
+        GPIO.setup(pin, GPIO.OUT)
+        GPIO.output(pin, GPIO.HIGH)
     
     # Set up queues
-    queues = {str(k):queue.Queue() for k in WORKERS}
+    queues = {str(w_id) : queue.Queue() for w_id, _ in WORKERS.items()}
     
     # Set up load generation thread
     load_gen_thread = threading.Thread(target=load_generator, daemon=True, args=(FUNC_EXEC_COUNT,))
