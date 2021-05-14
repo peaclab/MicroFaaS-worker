@@ -16,12 +16,12 @@ except:
 # https://github.com/kmu-bigdata/serverless-faas-workbench/blob/master/aws/cpu-memory/float_operation/lambda_function.py
 def float_operations(params):
     n = params['n']
-    start = time()
+    start = time.time()
     for i in range(0, n):
         sin_i = math.sin(i)
         cos_i = math.cos(i)
         sqrt_i = math.sqrt(i)
-    latency = time() - start
+    latency = time.time() - start
     return latency
 
 def cascading_sha256(params):

@@ -69,6 +69,12 @@ def power_up_worker(worker_id):
     """
     Power up a worker by pulsing its PWR_BUT line low for 500ms
     """
+    print("DEBUG: Powering up worker " + str(worker_id))
+    GPIO.output(WORKERS[str(worker_id)], GPIO.LOW)
+    time.sleep(0.5)
+    GPIO.output(WORKERS[str(worker_id)], GPIO.HIGH)
+    # Do it again, just to be sure
+    time.sleep(0.3)
     GPIO.output(WORKERS[str(worker_id)], GPIO.LOW)
     time.sleep(0.5)
     GPIO.output(WORKERS[str(worker_id)], GPIO.HIGH)
@@ -113,6 +119,8 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         # Worker should now shutdown on its own immediately
         # Check if there's more work for it in its queue
         if not queues[str(self.worker_id)].empty():
+            # Give it a a little time to power down
+            time.sleep(1.2)
             # Turn it back on to finish the work
             power_up_worker(self.worker_id)
         return
@@ -120,7 +128,10 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
 
 
 class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
-    pass
+    def server_bind(self) -> None:
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.socket.bind(self.server_address)
+        return
 
 
 # def client(ip, port, client_id):
