@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from json.decoder import JSONDecodeError
 import os
 import socket
 import threading
@@ -10,6 +11,9 @@ import string
 import json
 import csv
 import logging as log
+from zlib import compress
+from binascii import hexlify
+from numpy import random as nprand
 from datetime import datetime, timedelta
 import Adafruit_BBIO.GPIO as GPIO
 
@@ -18,7 +22,7 @@ import Adafruit_BBIO.GPIO as GPIO
 # Port 0 means to select an arbitrary unused port
 HOST, PORT = "", 63302
 
-log.basicConfig(level=log.DEBUG)
+log.basicConfig(level=log.INFO)
 
 class Worker:
     BTN_PRESS_DELAY = 0.5
@@ -151,7 +155,11 @@ class ThreadsafeCSVWriter:
         # data_json should look like {i_id, f_id, result, timing: {init, begin_exec, end_exec, fin_timestamp}}
         # where init, pre_exec, and post_exec are negative millisecond values, and
         # fin_timestamp is a UNIX timestamp in milliseconds to be used as a reference
-        data = json.loads(data_json)
+        try:
+            data = json.loads(data_json)
+        except JSONDecodeError as e:
+            log.error("Cannot save malformed JSON from worker %s: %s", worker_id, e)
+            return False
 
         # Convert relative timestamps to absolutes, and milliseconds to fractional seconds
         try:
@@ -186,21 +194,21 @@ class ThreadsafeCSVWriter:
 WORKERS = {
     "2": Worker(2, "P9_41"),
     "3": Worker(3, "P8_7"),
-    "4": Worker(4, "P8_8"),
-    "5": Worker(5, "P8_9"),
-    "6": Worker(6, "P8_10"),
-    "7": Worker(7, "P8_11"),
-    "8": Worker(8, "P8_12"),
-    "9": Worker(9, "P8_14"),
-    "10": Worker(10, "P8_15"),
-    "11": Worker(11, "P8_16"),
+    # "4": Worker(4, "P8_8"),
+    # "5": Worker(5, "P8_9"),
+    # "6": Worker(6, "P8_10"),
+    # "7": Worker(7, "P8_11"),
+    # "8": Worker(8, "P8_12"),
+    # "9": Worker(9, "P8_14"),
+    # "10": Worker(10, "P8_15"),
+    # "11": Worker(11, "P8_16"),
 }
 
 # How many total functions to run across all workers
 FUNC_EXEC_COUNT = 1000
 
 # How often to populate queues (seconds)
-LOAD_GEN_PERIOD = 0.5
+LOAD_GEN_PERIOD = 10
 
 # JSON payload to send when we want the worker to power down or reboot
 SHUTDOWN_PAYLOAD = json.dumps(
@@ -227,9 +235,10 @@ SOCK_TIMEOUT = 60
 
 # Supported workload functions and sample inputs.
 # Make sure COMMANDS.keys() matches your workers' FUNCTIONS.keys()!
-random.seed(
-    "MicroFaaS", version=2
-)  # Hardcode seed for reproducibilityqueues[str(self.worker_id)]
+# Hardcode seeds for reproducibility
+random.seed("MicroFaaS", version=2)
+nprand.seed(63302)
+matrix_sizes = list([random.randint(2, 10) for _ in range(10)])
 COMMANDS = {
     "float_operations": [{"n": random.randint(1, 1000000)} for _ in range(10)],
     "cascading_sha256": [
@@ -246,8 +255,51 @@ COMMANDS = {
         }
         for _ in range(10)
     ],
+    "matmul": [
+        {
+            "A": nprand.random((matrix_sizes[n], matrix_sizes[n])).tolist(),
+            "B": nprand.random((matrix_sizes[n], matrix_sizes[n])).tolist()
+        } for n in range(10)
+    ],
+    "linpack": [
+        {
+            "A": nprand.random((matrix_sizes[n], matrix_sizes[n])).tolist(),
+            "B": nprand.random((matrix_sizes[n], )).tolist()
+        } for n in range(10)
+    ],
+    "html_generation": [{"n": random.randint(1, 128)} for _ in range(10)],
+    "pyaes": [
+        {  # data is 16*n random chars, rounds is rand int upto 10k
+            "data": "".join(random.choices(string.ascii_letters + string.digits, k=random.randint(1,10)*16)),
+            "rounds": random.randint(1, 10000),
+        }
+        for _ in range(10)
+    ],
+    "zlib_decompress": [ # Having a little fun here, as random strings don't compress well
+        {"data": hexlify(compress(b"It was the best of times.\nIt was the worst of times.")).decode("ascii")},
+        {"data": hexlify(compress(b"Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.")).decode("ascii")},
+        {"data": hexlify(compress(b"But I must explain to you how all this mistaken idea of denouncing pleasure and praising pain was born and I will give you a complete account of the system, and expound the actual teachings of the great explorer of the truth, the master-builder of human happiness. No one rejects, dislikes, or avoids pleasure itself, because it is pleasure, but because those who do not know how to pursue pleasure rationally encounter consequences that are extremely painful. Nor again is there anyone who loves or pursues or desires to obtain pain of itself, because it is pain, but because occasionally circumstances occur in which toil and pain can procure him some great pleasure. To take a trivial example, which of us ever undertakes laborious physical exercise, except to obtain some advantage from it? But who has any right to find fault with a man who chooses to enjoy a pleasure that has no annoying consequences, or one who avoids a pain that produces no resultant pleasure?")).decode("ascii")},
+        {"data": hexlify(compress(b"We hold these truths to be self-evident, that all men are created equal, that they are endowed by their Creator with certain unalienable Rights, that among these are Life, Liberty and the pursuit of Happiness.--That to secure these rights, Governments are instituted among Men, deriving their just powers from the consent of the governed, --That whenever any Form of Government becomes destructive of these ends, it is the Right of the People to alter or to abolish it, and to institute new Government, laying its foundation on such principles and organizing its powers in such form, as to them shall seem most likely to effect their Safety and Happiness. Prudence, indeed, will dictate that Governments long established should not be changed for light and transient causes; and accordingly all experience hath shewn, that mankind are more disposed to suffer, while evils are sufferable, than to right themselves by abolishing the forms to which they are accustomed.")).decode("ascii")},
+        {"data": hexlify(compress(b"Do not go gentle into that good night,\nOld age should burn and rave at close of day;\nRage, rage against the dying of the light.\n\nThough wise men at their end know dark is right,\nBecause their words had forked no lightning they\nDo not go gentle into that good night.\nGood men, the last wave by, crying how bright\nTheir frail deeds might have danced in a green bay,\nRage, rage against the dying of the light.\n\nWild men who caught and sang the sun in flight,\nAnd learn, too late, they grieved it on its way,\nDo not go gentle into that good night.\n\nGrave men, near death, who see with blinding sight\nBlind eyes could blaze like meteors and be gay,\nRage, rage against the dying of the light.\n\nAnd you, my father, there on the sad height,\nCurse, bless, me now with your fierce tears, I pray.\nDo not go gentle into that good night.\nRage, rage against the dying of the light.")).decode("ascii")},
+    ],
+    "regex_search": [
+        {  # data is 64 random chars, pattern just looks for any digit-nondigit-digit sequence
+            "data": "".join(random.choices(string.ascii_letters + string.digits, k=64)),
+            "pattern": r"\d\D\d",
+        }
+        for _ in range(10)
+    ],
+    "regex_match": [
+        {  # data is 64 random chars, pattern just looks for any digit-nondigit-digit sequence
+            "data": "".join(random.choices(string.ascii_letters + string.digits, k=64)),
+            "pattern": r"\d\D\d",
+        }
+        for _ in range(10)
+    ],
 }
-random.seed()  # Reset seed to "truly" random
+# Reset seeds to "truly" random
+random.seed()
+nprand.seed()
 
 
 class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
@@ -275,7 +327,7 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         try:
             w = WORKERS[str(self.worker_id)]
             w.last_connection = datetime.now()
-        except IndexError:
+        except KeyError:
             log.error("Worker with unknown ID %s attempted to connect", self.worker_id)
             return
 
@@ -296,7 +348,10 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
 
         # Now we wait for work to happen and results to come back
         # The socket timeout will limit how long we wait
-        self.data = self.request.recv(8192).strip()
+        try:
+            self.data = self.request.recv(12288).strip()
+        except socket.timeout:
+            log.error("Timed out waiting for worker %s to run %s", self.worker_id, job_json)
 
         # Save results to CSV
         log.debug("Worker %s returned: %s", self.worker_id, self.data)
