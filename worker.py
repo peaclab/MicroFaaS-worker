@@ -61,7 +61,7 @@ timing['end_exec'] = time.ticks_ms()
 # fin_counter and fin_timestamp should represent roughly the same moment
 timing['fin_counter'] = time.ticks_ms()
 # Hopefully NTP has an accurate time for us at this point
-timing['fin_timestamp'] = time.time_ns()//100000
+timing['fin_timestamp'] = time.time_ns()//1000000
 
 # Now we make all times (excl. fin_timestamp) relative to fin_counter
 final_timing = {

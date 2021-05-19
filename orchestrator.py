@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from os import write
+import os
 import socket
 import threading
 import socketserver
@@ -11,7 +11,6 @@ import json
 import csv
 import logging as log
 from datetime import datetime, timedelta
-from typing_extensions import runtime
 import Adafruit_BBIO.GPIO as GPIO
 
 # TCP Server Setup
@@ -19,10 +18,11 @@ import Adafruit_BBIO.GPIO as GPIO
 # Port 0 means to select an arbitrary unused port
 HOST, PORT = "", 63302
 
+log.basicConfig(level=log.DEBUG)
 
 class Worker:
     BTN_PRESS_DELAY = 0.5
-    LAST_CONNECTION_TIMEOUT = datetime.timedelta(seconds=8)
+    LAST_CONNECTION_TIMEOUT = timedelta(seconds=8)
     POWER_UP_MAX_RETRIES = 6
 
     def __init__(self, id, pin) -> None:
@@ -53,7 +53,7 @@ class Worker:
             first_attempt_time = datetime.now()
             while retries < self.POWER_UP_MAX_RETRIES:
                 log.info(
-                    "Attempting to power up worker %s (try #%d)", self.id, self.pin
+                    "Attempting to power up worker %s (try #%d)", self.id, retries
                 )
                 GPIO.output(self.pin, GPIO.LOW)
                 time.sleep(self.BTN_PRESS_DELAY)
@@ -126,17 +126,21 @@ class ThreadsafeCSVWriter:
                 "function_id",
                 "result",
                 "init_time",
-                "pre_exec_time",
-                "post_exec_time",
+                "begin_exec_time",
+                "end_exec_time",
                 "fin_time",
             ],
         )
 
         with self._file_lock:
             self._writer.writeheader()
+            self._file_handle.flush()
+            os.fsync(self._file_handle)
 
     def __del__(self):
         with self._file_lock:
+            self._file_handle.flush()
+            os.fsync(self._file_handle)
             self._file_handle.close()
 
     def save_raw_result(self, worker_id, data_json):
@@ -144,33 +148,35 @@ class ThreadsafeCSVWriter:
         Process and save a raw JSON string recv'd from a worker to CSV
         """
 
-        # data_json should look like {i_id, f_id, result, timing: {init, pre_exec, post_exec, fin_timestamp}}
+        # data_json should look like {i_id, f_id, result, timing: {init, begin_exec, end_exec, fin_timestamp}}
         # where init, pre_exec, and post_exec are negative millisecond values, and
         # fin_timestamp is a UNIX timestamp in milliseconds to be used as a reference
         data = json.loads(data_json)
 
         # Convert relative timestamps to absolutes, and milliseconds to fractional seconds
         try:
-            tref = int(data["fin_timestamp"])
+            tref = int(data["timing"]["fin_timestamp"])
             row = {
                 "invocation_id": data["i_id"],
                 "worker": worker_id,
                 "function_id": data["f_id"],
                 "result": data["result"],
-                "init_time": (tref + int(data["init"])) / 1000,
-                "pre_exec_time": (tref + int(data["pre_exec"])) / 1000,
-                "post_exec_time": (tref + int(data["post_exec"])) / 1000,
+                "init_time": (tref + int(data["timing"]["init"])) / 1000,
+                "begin_exec_time": (tref + int(data["timing"]["begin_exec"])) / 1000,
+                "end_exec_time": (tref + int(data["timing"]["end_exec"])) / 1000,
                 "fin_time": tref / 1000,
             }
-        except IndexError:
-            log.error("Bad schema")
+        except KeyError as e:
+            log.error("Bad schema: %s", e)
             return False
-        except ValueError:
-            log.error("Bad cast")
+        except ValueError as e:
+            log.error("Bad cast: %s", e)
             return False
 
         with self._file_lock:
             self._writer.writerow(row)
+            self._file_handle.flush()
+            os.fsync(self._file_handle)
 
         return row['invocation_id']
 
@@ -303,12 +309,14 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         # Check if there's more work for it in its queue
         # If yes, send reboot. Otherwise send shutdown
         if w.job_queue.empty():
+            log.info("Worker %s's queue is empty. Sending shutdown payload.", self.worker_id)
             self.request.sendall((SHUTDOWN_PAYLOAD + "\n").encode(encoding="ascii"))
         else:
+            log.debug("Finished handling worker %s. Sending reboot payload.", self.worker_id)
             self.request.sendall((REBOOT_PAYLOAD + "\n").encode(encoding="ascii"))
 
 
-
+        
 
 class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     def server_bind(self) -> None:
@@ -338,7 +346,7 @@ def load_generator(count):
                 "f_args": random.choice(COMMANDS[f_id]),
             }
             w.job_queue.put_nowait(json.dumps(cmd))
-            log.debug("Added job to worker %s's queue: %s", w.id, json.dumps(cmd))
+            #log.debug("Added job to worker %s's queue: %s", w.id, json.dumps(cmd))
             if q_was_empty:
                 # This worker's queue was empty, meaning it probably isn't
                 # powered on right now. Now that it has work, power it up
@@ -353,7 +361,7 @@ def load_generator(count):
 if __name__ == "__main__":
 
     # Set up CSV writer
-    writer = ThreadsafeCSVWriter(datetime.strftime("%Y%m%d.%H%M%S")+".microfaas-log.csv")
+    writer = ThreadsafeCSVWriter(datetime.now().strftime("%Y%m%d.%H%M%S")+".microfaas-log.csv")
 
     # Set up load generation thread
     load_gen_thread = threading.Thread(
