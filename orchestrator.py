@@ -26,7 +26,7 @@ HOST, PORT = "", 63302
 log.basicConfig(level=log.INFO)
 
 # How many total functions to run across all workers
-FUNC_EXEC_COUNT = 10
+FUNC_EXEC_COUNT = 10000
 
 # How often to populate queues (seconds)
 LOAD_GEN_PERIOD = 1
@@ -201,14 +201,14 @@ class ThreadsafeCSVWriter:
 WORKERS = {
     "2": Worker(2, "P9_41"),
     "3": Worker(3, "P8_7"),
-    # "4": Worker(4, "P8_8"),
-    # "5": Worker(5, "P8_9"),
-    # "6": Worker(6, "P8_10"),
-    # "7": Worker(7, "P8_11"),
-    # "8": Worker(8, "P8_12"),
-    # "9": Worker(9, "P8_14"),
-    # "10": Worker(10, "P8_15"),
-    # "11": Worker(11, "P8_16"),
+    "4": Worker(4, "P8_8"),
+    "5": Worker(5, "P8_9"),
+    "6": Worker(6, "P8_10"),
+    "7": Worker(7, "P8_11"),
+    "8": Worker(8, "P8_12"),
+    "9": Worker(9, "P8_14"),
+    "10": Worker(10, "P8_15"),
+    "11": Worker(11, "P8_16"),
 }
 
 # JSON payload to send when we want the worker to power down or reboot
