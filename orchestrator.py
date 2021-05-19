@@ -273,48 +273,41 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
             log.error("Worker with unknown ID %s attempted to connect", self.worker_id)
             return
 
-        while not w.job_queue.empty():
-            # Send the worker the next item on the queue
-            try:
-                job_json = w.job_queue.get_nowait()
-                self.request.sendall((job_json + "\n").encode(encoding="ascii"))
-                log.info("Transmitted work to worker %s", self.worker_id)
-                log.debug(job_json)
-            except queue.Empty:
-                # This worker's queue is suddenly empty..., so tell it to shutdown
-                self.request.sendall(SHUTDOWN_PAYLOAD)
-                log.error(
-                    "Worker %s's work went missing, probably due to race condition. Shutdown payload sent.",
-                    self.worker_id,
-                )
-                return
+        # Send the worker the next item on the queue
+        try:
+            job_json = w.job_queue.get_nowait()
+            self.request.sendall((job_json + "\n").encode(encoding="ascii"))
+            log.info("Transmitted work to worker %s", self.worker_id)
+            log.debug(job_json)
+        except queue.Empty:
+            # Worker's queue has been empty since the connection began
+            self.request.sendall(SHUTDOWN_PAYLOAD + "\n")
+            log.warning(
+                "Worker %s requested work while queue empty. Shutdown payload sent.",
+                self.worker_id,
+            )
+            return
 
-            # Now we wait for work to happen and results to come back
-            # The socket timeout will limit how long we wait
-            self.data = self.request.recv(8192).strip()
+        # Now we wait for work to happen and results to come back
+        # The socket timeout will limit how long we wait
+        self.data = self.request.recv(8192).strip()
 
-            # Save results to CSV
-            log.debug("Worker %s returned: %s", self.worker_id, self.data)
-            writer_result = writer.save_raw_result(self.worker_id, self.data)
-            if not writer_result:
-                log.error("Failed to process results from worker %s!", self.worker_id)
-            else:
-                log.info("Processed results of invocation %s from worker %s", writer_result, self.worker_id)
+        # Save results to CSV
+        log.debug("Worker %s returned: %s", self.worker_id, self.data)
+        writer_result = writer.save_raw_result(self.worker_id, self.data)
+        if not writer_result:
+            log.error("Failed to process results from worker %s!", self.worker_id)
+        else:
+            log.info("Processed results of invocation %s from worker %s", writer_result, self.worker_id)
 
-            # Check if there's more work for it in its queue
-            # If yes, send reboot. Otherwise send shutdown
-            if w.job_queue.empty():
-                self.request.sendall(SHUTDOWN_PAYLOAD)
-                return
-            else:
-                self.request.sendall(REBOOT_PAYLOAD)
+        # Check if there's more work for it in its queue
+        # If yes, send reboot. Otherwise send shutdown
+        if w.job_queue.empty():
+            self.request.sendall(SHUTDOWN_PAYLOAD + "\n")
+        else:
+            self.request.sendall(REBOOT_PAYLOAD + "\n")
 
-        # Reaching here means a worker's queue has been empty since the connection began
-        self.request.sendall(SHUTDOWN_PAYLOAD)
-        log.warning(
-            "Worker %s requested work while queue empty. Shutdown payload sent.",
-            self.worker_id,
-        )
+
 
 
 class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
