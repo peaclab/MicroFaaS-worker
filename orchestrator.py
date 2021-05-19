@@ -281,7 +281,7 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
             log.debug(job_json)
         except queue.Empty:
             # Worker's queue has been empty since the connection began
-            self.request.sendall(SHUTDOWN_PAYLOAD + "\n")
+            self.request.sendall((SHUTDOWN_PAYLOAD + "\n").encode(encoding="ascii"))
             log.warning(
                 "Worker %s requested work while queue empty. Shutdown payload sent.",
                 self.worker_id,
@@ -303,9 +303,9 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         # Check if there's more work for it in its queue
         # If yes, send reboot. Otherwise send shutdown
         if w.job_queue.empty():
-            self.request.sendall(SHUTDOWN_PAYLOAD + "\n")
+            self.request.sendall((SHUTDOWN_PAYLOAD + "\n").encode(encoding="ascii"))
         else:
-            self.request.sendall(REBOOT_PAYLOAD + "\n")
+            self.request.sendall((REBOOT_PAYLOAD + "\n").encode(encoding="ascii"))
 
 
 
