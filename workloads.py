@@ -40,20 +40,16 @@ def cascading_md5(params):
         md5_data = hashlib.md5(md5_data).digest()
     return binascii.hexlify(md5_data)
 
-def shutdown(params):
+def fwrite(params):
     try:
-        with open("/proc/sysrq-trigger", 'w') as f:
-            # write 'o' to halt, 'b' to reboot
-            f.write('o')
+        with open(params['path'], 'w') as f:
+            f.write(params['data'])
     except EnvironmentError:
-        print("ERR: Shutdown request failed. Are sysrq's enabled?")
-    finally:
-        # We shouldn't actually make it this far
-        sys.exit()
+        print("ERR: Write request failed. Are sysrq's enabled?")
     return
 
 # Dictionary mapping available function names to their IDs
 FUNCTIONS = {"float_operations": float_operations,
     "cascading_sha256": cascading_sha256,
     "cascading_md5": cascading_md5,
-    "shutdown": shutdown}
+    "fwrite": fwrite}
