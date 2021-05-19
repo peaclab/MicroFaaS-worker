@@ -22,7 +22,14 @@ import Adafruit_BBIO.GPIO as GPIO
 # Port 0 means to select an arbitrary unused port
 HOST, PORT = "", 63302
 
+# Log Level
 log.basicConfig(level=log.INFO)
+
+# How many total functions to run across all workers
+FUNC_EXEC_COUNT = 10
+
+# How often to populate queues (seconds)
+LOAD_GEN_PERIOD = 1
 
 class Worker:
     BTN_PRESS_DELAY = 0.5
@@ -204,12 +211,6 @@ WORKERS = {
     # "11": Worker(11, "P8_16"),
 }
 
-# How many total functions to run across all workers
-FUNC_EXEC_COUNT = 1000
-
-# How often to populate queues (seconds)
-LOAD_GEN_PERIOD = 10
-
 # JSON payload to send when we want the worker to power down or reboot
 SHUTDOWN_PAYLOAD = json.dumps(
     {
@@ -384,10 +385,12 @@ def load_generator(count):
     """
     Load generation thread. Run as daemon
 
-    Currently a stub that just gives every queue a function each period
+    Every period, picks a random number of workers and puts a new job on their queue
     """
+    # Ensure jobs are run in a balanced way
+    job_counts = dict({k:(count // len(COMMANDS)) for k, _ in COMMANDS.items()})
     while count > 0:
-        for _, w in WORKERS.items():
+        for _, w in random.sample(WORKERS.items(), random.randint(1,len(WORKERS))):
             q_was_empty = w.job_queue.empty()
             f_id = random.choice(list(COMMANDS.keys()))
             cmd = {
@@ -402,15 +405,26 @@ def load_generator(count):
             }
             w.job_queue.put_nowait(json.dumps(cmd))
             #log.debug("Added job to worker %s's queue: %s", w.id, json.dumps(cmd))
+
+            # Keep track of how many times we've run this job
+            job_counts[f_id] -= 1
+            if job_counts[f_id] <= 0:
+                # If we've run it enough, remove it from the list of commands
+                log.info("Enough invocations of %s have been queued up, so popping from COMMANDS", f_id)
+                COMMANDS.pop(f_id, None)
+
             if q_was_empty:
                 # This worker's queue was empty, meaning it probably isn't
                 # powered on right now. Now that it has work, power it up
                 # asynchronously (so that this thread can continue)
                 log.debug("Requesting async power-up of worker %s", w.id)
-                w.power_up_async()
-
+                try:
+                    w.power_up_async()
+                except RuntimeError as e:
+                    log.error("Potential race condition/deadlock: %s", e)
             count -= 1
         time.sleep(LOAD_GEN_PERIOD)
+    log.info("Queuing complete!")
 
 
 if __name__ == "__main__":
@@ -420,7 +434,7 @@ if __name__ == "__main__":
 
     # Set up load generation thread
     load_gen_thread = threading.Thread(
-        target=load_generator, daemon=True, args=(FUNC_EXEC_COUNT,)
+        target=load_generator, daemon=False, args=(FUNC_EXEC_COUNT,)
     )
     load_gen_thread.start()
 
@@ -432,16 +446,20 @@ if __name__ == "__main__":
         # Start a thread with the server -- that thread will then start one
         # more thread for each request
         server_thread = threading.Thread(target=server.serve_forever)
-        # Exit the server thread when the main thread terminates
-        server_thread.daemon = True
+        # Run the server thread when the main thread terminates
+        server_thread.daemon = False
         server_thread.start()
         print("Server loop running in thread:", server_thread.name)
 
-        # client(ip, port, 6)
-        # client(ip, port, 4)
-        # client(ip, port, 5)
+        # Run at least until we finish queuing up our workloads
+        load_gen_thread.join()
 
-        # Run server for an hour (TODO: hacky af)
-        time.sleep(3600)
+        # Then check if it's been a while since our last request
+        all_queues_not_empty = True
+        while all_queues_not_empty:
+            all_queues_not_empty = False
+            for _, w in WORKERS.items():
+                all_queues_not_empty = all_queues_not_empty or not w.job_queue.empty()
+            time.sleep(2)
 
         server.shutdown()
