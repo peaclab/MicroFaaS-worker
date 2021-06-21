@@ -101,7 +101,7 @@ workloads.FUNCTIONS[cmd['f_id']](cmd['f_args'])
 # Then we'll probably be forcibly rebooted/shutdown
 
 # If we make it here, things are getting weird
-print("WARN: Follow-up command allowed execution to continue. Shutting down...")
+print("WARN: Follow-up command allowed execution to continue. Rebooting...")
 
 # Immediate Shutdown
-shutdown()
+reboot()

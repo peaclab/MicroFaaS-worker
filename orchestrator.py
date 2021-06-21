@@ -199,16 +199,16 @@ class ThreadsafeCSVWriter:
 # We assume the ID# also maps to the last octet of the worker's IP
 # e.g., if the orchestrator is 192.168.1.1, and workers are 192.168.1.2-11, this should be range(2, 12)
 WORKERS = {
-    "2": Worker(2, "P9_41"),
-    "3": Worker(3, "P8_7"),
-    "4": Worker(4, "P8_8"),
-    "5": Worker(5, "P8_9"),
-    "6": Worker(6, "P8_10"),
-    "7": Worker(7, "P8_11"),
-    "8": Worker(8, "P8_12"),
-    "9": Worker(9, "P8_14"),
-    "10": Worker(10, "P8_15"),
-    "11": Worker(11, "P8_16"),
+    "2": Worker(2, "P9_12"),
+    "3": Worker(3, "P9_15"),
+    "4": Worker(4, "P9_23"),
+    "5": Worker(5, "P9_25"),
+    "6": Worker(6, "P9_27"),
+    "7": Worker(7, "P8_8"),
+    "8": Worker(8, "P8_10"),
+    "9": Worker(9, "P8_12"),
+    "10": Worker(10, "P8_14"),
+    "11": Worker(11, "P8_26"),
 }
 
 # JSON payload to send when we want the worker to power down or reboot
@@ -232,8 +232,7 @@ REBOOT_PAYLOAD = json.dumps(
 # SHUTDOWN_PAYLOAD = b"{\"i_id\": \"PWROFF\", \"f_id\": \"fwrite\", \"f_args\": {path}}\n"
 
 # Socket timeout
-SOCK_TIMEOUT = 60
-
+SOCK_TIMEOUT = 90
 # Supported workload functions and sample inputs.
 # Make sure COMMANDS.keys() matches your workers' FUNCTIONS.keys()!
 # Hardcode seeds for reproducibility
@@ -353,6 +352,7 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
             self.data = self.request.recv(12288).strip()
         except socket.timeout:
             log.error("Timed out waiting for worker %s to run %s", self.worker_id, job_json)
+            return
 
         # Save results to CSV
         log.debug("Worker %s returned: %s", self.worker_id, self.data)
@@ -378,6 +378,7 @@ class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     def server_bind(self) -> None:
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.socket.bind(self.server_address)
+        log.info("Server thread bound to %s", self.server_address)
         return
 
 
@@ -387,6 +388,7 @@ def load_generator(count):
 
     Every period, picks a random number of workers and puts a new job on their queue
     """
+    log.info("Load generator started (limit: %d total invocations)", count)
     # Ensure jobs are run in a balanced way
     job_counts = dict({k:(count // len(COMMANDS)) for k, _ in COMMANDS.items()})
     while count > 0:
@@ -424,8 +426,27 @@ def load_generator(count):
                     log.error("Potential race condition/deadlock: %s", e)
             count -= 1
         time.sleep(LOAD_GEN_PERIOD)
-    log.info("Queuing complete!")
+    log.info("Load generator exiting (queuing complete)")
 
+def health_monitor(timeout=120):
+    timeout_delta = timedelta(seconds=timeout)
+    all_queues_not_empty = True
+    while all_queues_not_empty:
+        all_queues_not_empty = False
+        for _, w in WORKERS.items():
+            if (not w.job_queue.empty() 
+                  and w.last_connection != datetime.min
+                  and datetime.now() - w.last_connection > timeout_delta):
+                log.warning("Haven't heard from worker %s since %s, requesting power-up", w.id, w.last_connection)
+                try:
+                    w.power_up_async(block_if_locked=False)
+                except RuntimeError as e:
+                    log.warning("Power-up request denied: %s", e)
+
+            # Check queues again
+            all_queues_not_empty = all_queues_not_empty or not w.job_queue.empty()
+        time.sleep(5)
+    log.info("Health monitor exiting (all queues empty)")
 
 if __name__ == "__main__":
 
@@ -438,6 +459,12 @@ if __name__ == "__main__":
     )
     load_gen_thread.start()
 
+    # Set up health monitor thread
+    health_monitor_thread = threading.Thread(
+        target=health_monitor, daemon=True
+    )
+    health_monitor_thread.start()
+
     # Set up server thread
     server = ThreadedTCPServer((HOST, PORT), ThreadedTCPRequestHandler)
     with server:
@@ -449,7 +476,7 @@ if __name__ == "__main__":
         # Run the server thread when the main thread terminates
         server_thread.daemon = False
         server_thread.start()
-        print("Server loop running in thread:", server_thread.name)
+        #print("Server loop running in thread:", server_thread.name)
 
         # Run at least until we finish queuing up our workloads
         load_gen_thread.join()

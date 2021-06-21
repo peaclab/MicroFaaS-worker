@@ -5,8 +5,8 @@ echo 1 > /proc/sys/kernel/sysrq
 
 # Start worker, with output to syslog
 cd /root
-micropython worker.py | logger -s -p 3
+micropython worker.py | logger -s -p 3 &
 
-# Failsafe Shutdown (if worker.py doesn't do this for us)
-sleep 120
-echo o > /proc/sysrq-trigger
+# Failsafe Reboot (if worker.py doesn't do this for us)
+sleep 180
+echo b > /proc/sysrq-trigger
