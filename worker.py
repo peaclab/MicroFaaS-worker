@@ -29,7 +29,7 @@ timing = {
 }
 
 s = socket.socket()
-ai = socket.getaddrinfo("192.168.1.1", 63302)
+ai = socket.getaddrinfo("192.168.1.2", 63302)
 addr = ai[0][-1]
 s.connect(addr)
 

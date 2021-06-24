@@ -197,9 +197,8 @@ class ThreadsafeCSVWriter:
 
 # Mapping of worker IDs to GPIO lines
 # We assume the ID# also maps to the last octet of the worker's IP
-# e.g., if the orchestrator is 192.168.1.1, and workers are 192.168.1.2-11, this should be range(2, 12)
+# e.g., if the orchestrator is 192.168.1.2, and workers are 192.168.1.3-12, this should be range(3, 13)
 WORKERS = {
-    "2": Worker(2, "P9_12"),
     "3": Worker(3, "P9_15"),
     "4": Worker(4, "P9_23"),
     "5": Worker(5, "P9_25"),
@@ -209,6 +208,7 @@ WORKERS = {
     "9": Worker(9, "P8_12"),
     "10": Worker(10, "P8_14"),
     "11": Worker(11, "P8_26"),
+    "12": Worker(12, "P9_12"),
 }
 
 # JSON payload to send when we want the worker to power down or reboot
