@@ -226,5 +226,6 @@ FUNCTIONS = {
     "zlib_decompress": zlib_decompress,
     "regex_search": regex_search,
     "regex_match": regex_match,
-    "fwrite": fwrite
+    "fwrite": fwrite,
+    "redis": redis
 }
