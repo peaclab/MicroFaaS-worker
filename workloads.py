@@ -28,6 +28,14 @@ try:
 except:
     import re
 import ucryptolib
+try:
+    import urandom as ur
+except:
+    import random as ur
+try:
+    import picoredis as pr
+except:
+    import redis as pr
 
 # https://github.com/kmu-bigdata/serverless-faas-workbench/blob/master/aws/cpu-memory/float_operation/lambda_function.py
 def float_operations(params):
@@ -167,6 +175,39 @@ def fwrite(params):
     except EnvironmentError:
         print("ERR: Write request failed. Are sysrq's enabled?")
     return
+		
+def redis(params)
+
+	try:
+#Connect to database
+		ur.seed(444)
+		r = pr.Redis(host=params['host'])
+		r.auth(params['pass'])
+		people = {"Johnny": {"spent":0, "balance":ur.getrandbits(4)}, "Jacky": {"spent":0, "balance":ur.getrandbits(4)}, "Jenny": {"spent":0, "balance":ur.getrandbits(4)}}
+		
+#Create entries
+		for name, desc in people.items():
+			print(r.hmset(name, desc))
+#Modify data
+		for i in range(params[loops])
+			r.multi()
+			r.hincrby("Jenny", "spent", params["spent"])
+			r.hincrby("Jenny", "balance", -1 * params["spent"])
+			r.hincrby("Johnny", "spent", params["spent"])
+			r.hincrby("Johnny", "balance", -1 * params["spent"])
+			r.hincrby("Jacky", "spent", params["spent"])
+			r.hincrby("Jacky", "balance", -1 * params["spent"])
+			r.execute()
+#Print data
+		for person in ["Jenny", "Johnny", "Jacky"]:
+			print(r.hgetall(person))
+#Delete all
+		r.flushall()
+	except:
+		return False
+
+
+	
 
 # Dictionary mapping available function names to their IDs
 FUNCTIONS = {
