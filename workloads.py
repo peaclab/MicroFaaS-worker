@@ -1,6 +1,8 @@
 import math
 import sys
 import random
+import micropg as p
+
 try:
     from ulab import numpy as np
     from ulab import scipy as spy
@@ -167,6 +169,31 @@ def fwrite(params):
     except EnvironmentError:
         print("ERR: Write request failed. Are sysrq's enabled?")
     return
+    
+def psql_inventory():
+	conn=p.connect(user="postgres", password="postgres", host="192.168.1.156", port="5432", database="bostonautosales")
+	cur = conn.cursor()
+	cur.execute('select Car_Make, Car_Model, Car_Model_Year, Number_in_Stock from inventory order by Car_Model_Year')
+
+	allCars = cur.fetchall()
+	print('The oldest car make and model in stock is the', allCars[0][0], allCars[0][1], 'and is from', allCars[0][2])
+	print('The newest car make and model in stock is the', allCars[-1][0], allCars[-1][1], 'and is from', allCars[-1][2])
+	carsDict={}
+	for car in allCars:
+		currCar = car[0]+ ' ' +car[1]
+		if not currCar in carsDict.keys():
+		        carsDict[currCar]=car[3]
+		else:
+		        carsDict[currCar]+=car[3]
+
+	count = 0
+	print("\nFull Inventory: ")
+	for brand in carsDict.keys():
+		print(brand, ":",carsDict[brand],"in stock")
+		count+= carsDict[brand]
+	print("\nTotal number of cars in stock:", count)
+	cur.close()
+	return
 
 # Dictionary mapping available function names to their IDs
 FUNCTIONS = {
