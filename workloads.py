@@ -182,27 +182,32 @@ def redis(params)
 #Connect to database
 		ur.seed(444)
 		r = pr.Redis(host=params['host'])
-		r.auth(params['pass'])
-		people = {"Johnny": {"spent":0, "balance":ur.getrandbits(4)}, "Jacky": {"spent":0, "balance":ur.getrandbits(4)}, "Jenny": {"spent":0, "balance":ur.getrandbits(4)}}
+		r.auth(params['password'])
+		people = {"Johnny": {"spent":0, "balance":ur.getrandbits(8)}, "Jacky": {"spent":0, "balance":ur.getrandbits(8)}, "Jenny": {"spent":0, "balance":ur.getrandbits(8)}}
 		
 #Create entries
 		for name, desc in people.items():
-			print(r.hmset(name, desc))
+			s = "{name} has {b} and spent {s}"
+			s= s.format(name=name, b=desc['balance'], s=desc['spent'])
+			print(s)
+			print(r.hmset(name, 'balance', desc['balance'], 'spent', desc['spent']))
+
 #Modify data
-		for i in range(params[loops])
+		for i in range(params['tries']):
 			r.multi()
-			r.hincrby("Jenny", "spent", params["spent"])
-			r.hincrby("Jenny", "balance", -1 * params["spent"])
-			r.hincrby("Johnny", "spent", params["spent"])
-			r.hincrby("Johnny", "balance", -1 * params["spent"])
-			r.hincrby("Jacky", "spent", params["spent"])
-			r.hincrby("Jacky", "balance", -1 * params["spent"])
-			r.execute()
+			r.hincrby("Jenny", "spent", params['spent'])
+			r.hincrby("Jenny", "balance", -1 * params['spent'])
+			r.hincrby("Johnny", "spent", params['spent'])
+			r.hincrby("Johnny", "balance", -1 * params['spent'])
+			r.hincrby("Jacky", "spent", params['spent'])
+			r.hincrby("Jacky", "balance", -1 * params['spent'])
+		r.exec()
 #Print data
-		for person in ["Jenny", "Johnny", "Jacky"]:
-			print(r.hgetall(person))
+	for person in ["Jacky", "Jenny", "Johnny"]:
+		print(person)
+		print(r.hgetall(person))
 #Delete all
-		r.flushall()
+	r.flushall()
 	except:
 		return False
 
