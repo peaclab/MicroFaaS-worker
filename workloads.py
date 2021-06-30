@@ -170,7 +170,7 @@ def fwrite(params):
             f.write(params['data'])
     except EnvironmentError:
         print("ERR: Write request failed. Are sysrq's enabled?")
-    returnwhere to buy 
+    return
 		
 def redis_modify(params)
 
