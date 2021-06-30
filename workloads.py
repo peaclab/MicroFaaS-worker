@@ -224,5 +224,6 @@ FUNCTIONS = {
     "regex_search": regex_search,
     "regex_match": regex_match,
     "fwrite": fwrite,
-    "redis": redis
+    "redis_modify": redis_modify,
+    "redis_insert": redis_insert
 }
