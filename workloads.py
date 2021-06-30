@@ -176,7 +176,7 @@ def redis_modify(params)
 
 	try:
 #Connect to database
-		r = pr.Redis(host='192.168.1.157)
+		r = pr.Redis(host='192.168.1.157')
 		r.auth('microfaas')
 
 #Modify data: deduct spendage from balance
@@ -194,7 +194,7 @@ def redis_insert(params)
 
 	try:
 #Connect to database
-		r = pr.Redis(host='192.168.1.157)
+		r = pr.Redis(host='192.168.1.157')
 		r.auth('microfaas')
 
 #Insert data: inserts new id and its balance
