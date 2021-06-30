@@ -176,7 +176,7 @@ def fwrite(params):
         print("ERR: Write request failed. Are sysrq's enabled?")
     return
 		
-def redis(params)
+def redis_modify(params)
 
 	try:
 #Connect to database
@@ -184,10 +184,31 @@ def redis(params)
 		r.auth('microfaas')
 
 #Modify data: deduct spendage from balance
-		r.incrby(params['id'], -1 * params['spend'])
+		r.incrby(params['id'], -1 * int(params['spend']))
 
 #Return new balance
-		return r.get(params['id'])
+		new_balance = r.get(params['id'])
+#Close database connection		
+		r.close()
+		return new_balance
+	except:
+		return False
+		
+def redis_insert(params)
+
+	try:
+#Connect to database
+		r = pr.Redis(host='192.168.1.157)
+		r.auth('microfaas')
+
+#Modify data: deduct spendage from balance
+		r.set(params['id'], int(params['balance']))
+
+#Return balance
+		bal = r.get(params['id'])
+#Close connection
+		r.close()
+		return bal
 	except:
 		return False
 
