@@ -180,34 +180,14 @@ def redis(params)
 
 	try:
 #Connect to database
-		ur.seed(444)
-		r = pr.Redis(host=params['host'])
-		r.auth(params['password'])
-		people = {"Johnny": {"spent":0, "balance":ur.getrandbits(8)}, "Jacky": {"spent":0, "balance":ur.getrandbits(8)}, "Jenny": {"spent":0, "balance":ur.getrandbits(8)}}
-		
-#Create entries
-		for name, desc in people.items():
-			s = "{name} has {b} and spent {s}"
-			s= s.format(name=name, b=desc['balance'], s=desc['spent'])
-			print(s)
-			print(r.hmset(name, 'balance', desc['balance'], 'spent', desc['spent']))
+		r = pr.Redis(host='192.168.1.157)
+		r.auth('microfaas')
 
-#Modify data
-		for i in range(params['tries']):
-			r.multi()
-			r.hincrby("Jenny", "spent", params['spent'])
-			r.hincrby("Jenny", "balance", -1 * params['spent'])
-			r.hincrby("Johnny", "spent", params['spent'])
-			r.hincrby("Johnny", "balance", -1 * params['spent'])
-			r.hincrby("Jacky", "spent", params['spent'])
-			r.hincrby("Jacky", "balance", -1 * params['spent'])
-		r.exec()
-#Print data
-	for person in ["Jacky", "Jenny", "Johnny"]:
-		print(person)
-		print(r.hgetall(person))
-#Delete all
-	r.flushall()
+#Modify data: deduct spendage from balance
+		r.incrby(params['id'], -1 * params['spend'])
+
+#Return new balance
+		return r.get(params['id'])
 	except:
 		return False
 
