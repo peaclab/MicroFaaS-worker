@@ -189,6 +189,7 @@ def psql_inventory(params):
 			retStr += str(car[4]) + ") " + currCar + ": " + str(car[3]) + " in stock\n"
 			carCount += car[3]
 		retStr += "Total cars in stock: " + str(carCount)
+		cur.close()
 		return retStr
 
 	except:
@@ -203,10 +204,10 @@ def psql_purchase(params):
 		cur = conn.cursor()
 
 		#Fetch the current number of car in stock using id
-		cur.execute('select number_in_stock from inventory where id='+str(param.id)
+		cur.execute('select number_in_stock from inventory where id='+str(params.id)
 		numCars = cur.fetchall()[0][0]
 		#Decrement the number of cars using id
-		cur.execute('update inventory set Number_in_Stock = ' + str(numCars-1)  + 'where id = ' + str(param.id))
+		cur.execute('update inventory set Number_in_Stock=' + str(numCars-1)  + 'where id=' + str(params.id))
 		#Commit new number_in_stock to the database
 		conn.commit()
 
