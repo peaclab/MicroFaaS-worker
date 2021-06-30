@@ -302,5 +302,5 @@ FUNCTIONS = {
     "redis_insert": redis_insert,
     "psql_inventory": psql_inventory,
     "psql_purchase": psql_purchase,
-    "fwrite": fwrite,
+    "fwrite": fwrite
 }
