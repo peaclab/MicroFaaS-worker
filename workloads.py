@@ -220,7 +220,7 @@ def redis_insert(params):
         return False
 
 
-def psql_inventory(params):
+def psql_inventory():
     try:
         # Establish connection to the postgreSQL database called bostonautosales
         conn = p.connect(
@@ -241,12 +241,12 @@ def psql_inventory(params):
         retStr = ""
         carCount = 0
         # Loop through all the cars that were fetched and create a string that shows all the cars in stock
-        print("\nFull Inventory: ")
         for index, car in enumerate(allCars):
             currCar = car[0] + " " + car[1] + " " + car[2]
             retStr += str(car[4]) + ") " + currCar + ": " + str(car[3]) + " in stock\n"
             carCount += car[3]
         retStr += "Total cars in stock: " + str(carCount)
+        cur.close()
         return retStr
 
     except:
@@ -268,14 +268,14 @@ def psql_purchase(params):
         cur = conn.cursor()
 
         # Fetch the current number of car in stock using id
-        cur.execute("select number_in_stock from inventory where id=" + str(param.id))
+        cur.execute("select number_in_stock from inventory where id=" + str(params.id))
         numCars = cur.fetchall()[0][0]
         # Decrement the number of cars using id
         cur.execute(
             "update inventory set Number_in_Stock = "
             + str(numCars - 1)
             + "where id = "
-            + str(param.id)
+            + str(params.id)
         )
         # Commit new number_in_stock to the database
         conn.commit()
