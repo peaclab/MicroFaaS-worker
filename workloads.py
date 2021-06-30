@@ -201,10 +201,10 @@ def redis_insert(params)
 		r = pr.Redis(host='192.168.1.157)
 		r.auth('microfaas')
 
-#Modify data: deduct spendage from balance
+#Insert data: inserts new id and its balance
 		r.set(params['id'], int(params['balance']))
 
-#Return balance
+#Return balance of new user
 		bal = r.get(params['id'])
 #Close connection
 		r.close()
