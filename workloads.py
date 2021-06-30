@@ -170,30 +170,69 @@ def fwrite(params):
         print("ERR: Write request failed. Are sysrq's enabled?")
     return
     
-def psql_inventory():
-	conn=p.connect(user="postgres", password="postgres", host="192.168.1.156", port="5432", database="bostonautosales")
-	cur = conn.cursor()
-	cur.execute('select Car_Make, Car_Model, Car_Model_Year, Number_in_Stock from inventory order by Car_Model_Year')
+def psql_inventory(params):
+	try:
+		#Establish connection to the postgreSQL database called bostonautosales
+		conn=p.connect(user="postgres", password="postgres", host="192.168.1.156", port="5432", database="bostonautosales")
 
-	allCars = cur.fetchall()
-	print('The oldest car make and model in stock is the', allCars[0][0], allCars[0][1], 'and is from', allCars[0][2])
-	print('The newest car make and model in stock is the', allCars[-1][0], allCars[-1][1], 'and is from', allCars[-1][2])
-	carsDict={}
-	for car in allCars:
-		currCar = car[0]+ ' ' +car[1]
-		if not currCar in carsDict.keys():
-		        carsDict[currCar]=car[3]
+		#Create cursor to read parameters from inventory table in ascending order by Car_Model_Year
+		cur = conn.cursor()
+		cur.execute('select Car_Make, Car_Model, Car_Model_Year, Number_in_Stock, id from inventory order by Car_Model_Year')
+
+		allCars = cur.fetchall()
+		retStr=""
+
+		#Loop through all the car parameters that were fetched and sum up the number of cars in stock for each make and model
+		carsDict={}
+		keysDict={}
+		for car in allCars:
+			currCar = car[0]+ ' ' +car[1] + ' ' + car[2]
+			if not currCar in carsDict.keys():
+				carsDict[currCar]=car[3]
+				keysDict[currCar]=car[4]
+			else:
+				carsDict[currCar]+=car[3]
+
+		#Append all individual inventory for each make, model, and year, as well as total number of cars
+		count = 0
+		for index, brand in enumerate(carsDict.keys()):
+			count+= carsDict[brand]
+			currStr= str(index) + ") " + brand + " : " + str(carsDict[brand])+" in stock"
+			retStr += currStr + "\n "
+		retStr += "Total number of cars in stock: " + str(count)
+		cur.close()
+		
+		#params["orchestratorFlag"] is only set to false if this inventory is being called by the psql_purchase function. This will return dictionaries instead of the inventory string
+		if (params["orchestratorFlag"] == False):
+			return (carsDict, keysDict)
 		else:
-		        carsDict[currCar]+=car[3]
+			return (retStr)
+	except:
+		return False
 
-	count = 0
-	print("\nFull Inventory: ")
-	for brand in carsDict.keys():
-		print(brand, ":",carsDict[brand],"in stock")
-		count+= carsDict[brand]
-	print("\nTotal number of cars in stock:", count)
-	cur.close()
-	return
+def psql_purchase(params):
+	try:
+		#Establish connection to the postgreSQL database called bostonautosales
+		conn=p.connect(user="postgres", password="postgres", host="192.168.1.156", port="5432", database="bostonautosales")
+
+		#Create cursor for database
+		cur = conn.cursor()
+
+		#Call psql_inventory function to get dictionaries of inventory
+		params = {"orchestratorFlag" : False}
+		carsDict, keysDict = psql_inventory(params)
+		
+		#params["chosenCar"] will be an int so brands[params["chosenCar"]] will convert the number into a string of the brand
+		brands = list(carsDict.keys())
+		cur.execute('update inventory set Number_in_Stock = ' + str(carsDict[brands[params["chosenCar"]]] - params["numCars"]) + 'where id = ' + str(keysDict[brands[params["chosenCar"]]]))
+		
+		#send all changes to the database to the psql server to be committed
+		conn.commit()
+		cur.close()
+		return
+	except:
+		return False
+		
 
 # Dictionary mapping available function names to their IDs
 FUNCTIONS = {
