@@ -177,36 +177,20 @@ def psql_inventory(params):
 
 		#Create cursor to read parameters from inventory table in ascending order by Car_Model_Year
 		cur = conn.cursor()
-		cur.execute('select Car_Make, Car_Model, Car_Model_Year, Number_in_Stock, id from inventory order by Car_Model_Year')
+		cur.execute('select Car_Make, Car_Model, Car_Model_Year, Number_in_Stock, id from inventory order by Car_Make')
 
 		allCars = cur.fetchall()
-		retStr=""
-
-		#Loop through all the car parameters that were fetched and sum up the number of cars in stock for each make and model
-		carsDict={}
-		keysDict={}
-		for car in allCars:
+		retStr = ""
+		carCount = 0
+		#Loop through all the cars that were fetched and create a string that shows all the cars in stock
+		print("\nFull Inventory: ")
+		for index,car in enumerate(allCars):
 			currCar = car[0]+ ' ' +car[1] + ' ' + car[2]
-			if not currCar in carsDict.keys():
-				carsDict[currCar]=car[3]
-				keysDict[currCar]=car[4]
-			else:
-				carsDict[currCar]+=car[3]
+			retStr += str(car[4]) + ") " + currCar + ": " + str(car[3]) + " in stock\n"
+			carCount += car[3]
+		retStr += "Total cars in stock: " + str(carCount)
+		return retStr
 
-		#Append all individual inventory for each make, model, and year, as well as total number of cars
-		count = 0
-		for index, brand in enumerate(carsDict.keys()):
-			count+= carsDict[brand]
-			currStr= str(index) + ") " + brand + " : " + str(carsDict[brand])+" in stock"
-			retStr += currStr + "\n "
-		retStr += "Total number of cars in stock: " + str(count)
-		cur.close()
-		
-		#params["orchestratorFlag"] is only set to false if this inventory is being called by the psql_purchase function. This will return dictionaries instead of the inventory string
-		if (params["orchestratorFlag"] == False):
-			return (carsDict, keysDict)
-		else:
-			return (retStr)
 	except:
 		return False
 
@@ -218,18 +202,16 @@ def psql_purchase(params):
 		#Create cursor for database
 		cur = conn.cursor()
 
-		#Call psql_inventory function to get dictionaries of inventory
-		params = {"orchestratorFlag" : False}
-		carsDict, keysDict = psql_inventory(params)
-		
-		#params["chosenCar"] will be an int so brands[params["chosenCar"]] will convert the number into a string of the brand
-		brands = list(carsDict.keys())
-		cur.execute('update inventory set Number_in_Stock = ' + str(carsDict[brands[params["chosenCar"]]] - params["numCars"]) + 'where id = ' + str(keysDict[brands[params["chosenCar"]]]))
-		
-		#send all changes to the database to the psql server to be committed
+		#Fetch the current number of car in stock using id
+		cur.execute('select number_in_stock from inventory where id='+str(param.id)
+		numCars = cur.fetchall()[0][0]
+		#Decrement the number of cars using id
+		cur.execute('update inventory set Number_in_Stock = ' + str(numCars-1)  + 'where id = ' + str(param.id))
+		#Commit new number_in_stock to the database
 		conn.commit()
+
 		cur.close()
-		return
+
 	except:
 		return False
 		
