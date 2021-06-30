@@ -29,10 +29,6 @@ except:
     import re
 import ucryptolib
 try:
-    import urandom as ur
-except:
-    import random as ur
-try:
     import picoredis as pr
 except:
     import redis as pr
@@ -174,7 +170,7 @@ def fwrite(params):
             f.write(params['data'])
     except EnvironmentError:
         print("ERR: Write request failed. Are sysrq's enabled?")
-    return
+    returnwhere to buy 
 		
 def redis_modify(params)
 
