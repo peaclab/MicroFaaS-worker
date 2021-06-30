@@ -1,6 +1,8 @@
 import math
 import sys
 import random
+import micropg as p
+
 try:
     from ulab import numpy as np
     from ulab import scipy as spy
@@ -167,6 +169,52 @@ def fwrite(params):
     except EnvironmentError:
         print("ERR: Write request failed. Are sysrq's enabled?")
     return
+    
+def psql_inventory(params):
+	try:
+		#Establish connection to the postgreSQL database called bostonautosales
+		conn=p.connect(user="postgres", password="postgres", host="192.168.1.156", port="5432", database="bostonautosales")
+
+		#Create cursor to read parameters from inventory table in ascending order by Car_Model_Year
+		cur = conn.cursor()
+		cur.execute('select Car_Make, Car_Model, Car_Model_Year, Number_in_Stock, id from inventory order by Car_Make')
+
+		allCars = cur.fetchall()
+		retStr = ""
+		carCount = 0
+		#Loop through all the cars that were fetched and create a string that shows all the cars in stock
+		print("\nFull Inventory: ")
+		for index,car in enumerate(allCars):
+			currCar = car[0]+ ' ' +car[1] + ' ' + car[2]
+			retStr += str(car[4]) + ") " + currCar + ": " + str(car[3]) + " in stock\n"
+			carCount += car[3]
+		retStr += "Total cars in stock: " + str(carCount)
+		return retStr
+
+	except:
+		return False
+
+def psql_purchase(params):
+	try:
+		#Establish connection to the postgreSQL database called bostonautosales
+		conn=p.connect(user="postgres", password="postgres", host="192.168.1.156", port="5432", database="bostonautosales")
+
+		#Create cursor for database
+		cur = conn.cursor()
+
+		#Fetch the current number of car in stock using id
+		cur.execute('select number_in_stock from inventory where id='+str(param.id)
+		numCars = cur.fetchall()[0][0]
+		#Decrement the number of cars using id
+		cur.execute('update inventory set Number_in_Stock = ' + str(numCars-1)  + 'where id = ' + str(param.id))
+		#Commit new number_in_stock to the database
+		conn.commit()
+
+		cur.close()
+
+	except:
+		return False
+		
 
 # Dictionary mapping available function names to their IDs
 FUNCTIONS = {
