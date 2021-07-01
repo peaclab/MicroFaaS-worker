@@ -307,7 +307,7 @@ def upload_file(params):
 			print("Can't open file.")
 			return False
 
-		urq.request('PUT', url, data=fi)\
+		urq.request('PUT', url, data=fi)
 	except:
 		return False
 
