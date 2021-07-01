@@ -36,6 +36,16 @@ try:
 except:
     import redis as pr
 
+try:
+    import urequests as urq
+except:
+    import requests as urq
+try:
+    import uio as io
+except:
+    import io
+
+
 # https://github.com/kmu-bigdata/serverless-faas-workbench/blob/master/aws/cpu-memory/float_operation/lambda_function.py
 def float_operations(params):
     n = params["n"]
@@ -284,6 +294,37 @@ def psql_purchase(params):
 
     except:
         return False
+        
+        
+def upload_file(params):
+	try:
+		url='http://192.168.1.158:9000/bucket/' +  params['file']
+		local_path = '/root/' +  +  params['file']
+		try:
+			with io.open(local_path, 'rb') as f:
+				fi = f.read()
+		except:
+			print("Can't open file.")
+			return False
+
+		urq.request('PUT', url, data=fi)\
+	except:
+		return False
+
+
+def download_file(params):
+	try:
+		url='http://192.168.1.158:9000/bucket/' + params['file']
+		r = urq.get(url)
+		local_path = '/root/' + params['file']
+		try:
+			with io.open(local_path, 'wb') as f:
+				f.write(r.content)
+		except:
+			print("File write error.")
+			return False
+	except:
+		return False
 
 
 # Dictionary mapping available function names to their IDs
@@ -302,5 +343,7 @@ FUNCTIONS = {
     "redis_insert": redis_insert,
     "psql_inventory": psql_inventory,
     "psql_purchase": psql_purchase,
-    "fwrite": fwrite
+    "fwrite": fwrite,
+    "upload_file": upload_file,
+    "download_file": download_file
 }
