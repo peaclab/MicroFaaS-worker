@@ -299,7 +299,7 @@ def psql_purchase(params):
 def upload_file(params):
     try:
         url = "http://192.168.1.158:9000/bucket/" + params["file"]
-        local_path = "/root/" + +params["file"]
+        local_path = "/root/" + params["file"]
         try:
             with io.open(local_path, "rb") as f:
                 fi = f.read()
