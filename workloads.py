@@ -278,14 +278,14 @@ def psql_purchase(params):
         cur = conn.cursor()
 
         # Fetch the current number of car in stock using id
-        cur.execute("select number_in_stock from inventory where id=" + str(params.id))
+        cur.execute("select number_in_stock from inventory where id=" + str(params["id"]))
         numCars = cur.fetchall()[0][0]
         # Decrement the number of cars using id
         cur.execute(
             "update inventory set Number_in_Stock = "
             + str(numCars - 1)
             + "where id = "
-            + str(params.id)
+            + str(params["id"])
         )
         # Commit new number_in_stock to the database
         conn.commit()
@@ -345,5 +345,5 @@ FUNCTIONS = {
     "psql_purchase": psql_purchase,
     "fwrite": fwrite,
     "upload_file": upload_file,
-    "download_file": download_file,
+    "download_file": download_file
 }
