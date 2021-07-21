@@ -126,42 +126,55 @@ class Worker:
 
 
 class ThreadsafeCSVWriter:
-    def __init__(self, path="microfaas-log.csv") -> None:
-        self._file_handle = open(path, "a+t")
+    def __init__(self, metric_path="microfaas-log.csv", result_path="microfaas-results.csv") -> None:
         self._file_lock = threading.Lock()
-        self._writer = csv.DictWriter(
-            self._file_handle,
+        self._metric_file_handle = open(metric_path, "a+t")
+        self._result_file_handle = open(result_path, "a+t")
+        self._metric_writer = csv.DictWriter(
+            self._metric_file_handle,
             fieldnames=[
                 "invocation_id",
                 "worker",
                 "function_id",
+                "exec_time",
+                "rtt",
+                "timestamp"
+            ],
+        )
+        self._result_writer = csv.DictWriter(
+            self._result_file_handle,
+            fieldnames=[
+                "invocation_id",
                 "result",
-                "init_time",
-                "begin_exec_time",
-                "end_exec_time",
-                "fin_time",
             ],
         )
 
         with self._file_lock:
-            self._writer.writeheader()
-            self._file_handle.flush()
-            os.fsync(self._file_handle)
+            self._metric_writer.writeheader()
+            self._metric_file_handle.flush()
+            os.fsync(self._metric_file_handle)
+
+            self._result_writer.writeheader()
+            self._result_file_handle.flush()
+            os.fsync(self._result_file_handle)
 
     def __del__(self):
         with self._file_lock:
-            self._file_handle.flush()
-            os.fsync(self._file_handle)
-            self._file_handle.close()
+            self._metric_file_handle.flush()
+            os.fsync(self._metric_file_handle)
+            self._metric_file_handle.close()
 
-    def save_raw_result(self, worker_id, data_json):
+            self._result_file_handle.flush()
+            os.fsync(self._result_file_handle)
+            self._result_file_handle.close()
+
+    def save_raw_result(self, worker_id, data_json, rtt, timestamp):
         """
         Process and save a raw JSON string recv'd from a worker to CSV
         """
 
-        # data_json should look like {i_id, f_id, result, timing: {init, begin_exec, end_exec, fin_timestamp}}
-        # where init, pre_exec, and post_exec are negative millisecond values, and
-        # fin_timestamp is a UNIX timestamp in milliseconds to be used as a reference
+        # data_json should look like {i_id, f_id, result, exec_time}
+        # where exec_time is in milliseconds
         try:
             data = json.loads(data_json)
         except JSONDecodeError as e:
@@ -170,16 +183,18 @@ class ThreadsafeCSVWriter:
 
         # Convert relative timestamps to absolutes, and milliseconds to fractional seconds
         try:
-            tref = int(data["timing"]["fin_timestamp"])
-            row = {
+            metric_row = {
                 "invocation_id": data["i_id"],
                 "worker": worker_id,
                 "function_id": data["f_id"],
-                "result": data["result"],
-                "init_time": (tref + int(data["timing"]["init"])) / 1000,
-                "begin_exec_time": (tref + int(data["timing"]["begin_exec"])) / 1000,
-                "end_exec_time": (tref + int(data["timing"]["end_exec"])) / 1000,
-                "fin_time": tref / 1000,
+                "exec_time": int(data["exec_time"]),
+                "rtt": int(rtt),
+                "timestamp": timestamp
+            }
+
+            result_row = {
+                "invocation_id": data["i_id"],
+                "result": data['result']
             }
         except KeyError as e:
             log.error("Bad schema: %s", e)
@@ -189,17 +204,20 @@ class ThreadsafeCSVWriter:
             return False
 
         with self._file_lock:
-            self._writer.writerow(row)
-            self._file_handle.flush()
-            os.fsync(self._file_handle)
+            self._metric_writer.writerow(metric_row)
+            self._metric_file_handle.flush()
+            os.fsync(self._metric_file_handle)
 
-        return row['invocation_id']
+            self._result_writer.writerow(result_row)
+            self._result_file_handle.flush()
+            os.fsync(self._result_file_handle)
+
+        return metric_row['invocation_id']
 
 # Mapping of worker IDs to GPIO lines
 # We assume the ID# also maps to the last octet of the worker's IP
-# e.g., if the orchestrator is 192.168.1.1, and workers are 192.168.1.2-11, this should be range(2, 12)
+# e.g., if the orchestrator is 192.168.1.2, and workers are 192.168.1.3-12, this should be range(3, 13)
 WORKERS = {
-    "2": Worker(2, "P9_12"),
     "3": Worker(3, "P9_15"),
     "4": Worker(4, "P9_23"),
     "5": Worker(5, "P9_25"),
@@ -209,6 +227,7 @@ WORKERS = {
     "9": Worker(9, "P8_12"),
     "10": Worker(10, "P8_14"),
     "11": Worker(11, "P8_26"),
+    "12": Worker(12, "P9_12"),
 }
 
 # JSON payload to send when we want the worker to power down or reboot
@@ -334,6 +353,7 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         # Send the worker the next item on the queue
         try:
             job_json = w.job_queue.get_nowait()
+            send_time = time.monotonic() * 1000
             self.request.sendall((job_json + "\n").encode(encoding="ascii"))
             log.info("Transmitted work to worker %s", self.worker_id)
             log.debug(job_json)
@@ -350,13 +370,17 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         # The socket timeout will limit how long we wait
         try:
             self.data = self.request.recv(12288).strip()
+            recv_time = time.monotonic() * 1000
         except socket.timeout:
             log.error("Timed out waiting for worker %s to run %s", self.worker_id, job_json)
             return
 
+        # Calculate Round Trip Time
+        rtt = recv_time - send_time
+
         # Save results to CSV
         log.debug("Worker %s returned: %s", self.worker_id, self.data)
-        writer_result = writer.save_raw_result(self.worker_id, self.data)
+        writer_result = writer.save_raw_result(self.worker_id, self.data, rtt, time.strftime("%Y-%m-%d %H:%M:%S"))
         if not writer_result:
             log.error("Failed to process results from worker %s!", self.worker_id)
         else:

@@ -19,17 +19,9 @@ def shutdown():
 def reboot():
     return workloads.fwrite({'path': "/proc/sysrq-trigger", 'data': "b"})
 
-# All timing values in milliseconds
-timing = {
-    'init': time.ticks_ms(),
-    'begin_exec': None,
-    'end_exec': None,
-    'fin_counter': None,
-    'fin_timestamp': None
-}
 
 s = socket.socket()
-ai = socket.getaddrinfo("192.168.1.1", 63302)
+ai = socket.getaddrinfo("192.168.1.2", 63302)
 addr = ai[0][-1]
 s.connect(addr)
 
@@ -48,35 +40,21 @@ except ValueError:
     reboot()
 
 # Try to execute the requested function
-timing['begin_exec'] = time.ticks_ms()
+begin_exec_time = time.ticks_ms()
 try:
     result = workloads.FUNCTIONS[cmd['f_id']](cmd['f_args'])
 except KeyError:
     print("ERR: Bad function ID or malformed array")
     s.close()
     reboot()
-timing['end_exec'] = time.ticks_ms()
-
-
-# fin_counter and fin_timestamp should represent roughly the same moment
-timing['fin_counter'] = time.ticks_ms()
-# Hopefully NTP has an accurate time for us at this point
-timing['fin_timestamp'] = time.time_ns()//1000000
-
-# Now we make all times (excl. fin_timestamp) relative to fin_counter
-final_timing = {
-    'init': time.ticks_diff(timing['init'], timing['fin_counter']),
-    'begin_exec': time.ticks_diff(timing['begin_exec'], timing['fin_counter']),
-    'end_exec': time.ticks_diff(timing['end_exec'], timing['fin_counter']),
-    'fin_timestamp': timing['fin_timestamp']
-}
+end_exec_time = time.ticks_ms()
 
 # Construct the reply to the orchestrator
 reply = {
     'f_id': cmd['f_id'],
     'i_id': cmd['i_id'],
     'result': result,
-    'timing': final_timing
+    'exec_time': time.ticks_diff(end_exec_time, begin_exec_time)
 }
 
 # Send the result back to the orchestrator
