@@ -56,6 +56,7 @@ class Worker:
 
     def __init__(self, id, pin) -> None:
         self.id = id
+        # self.pin is the last octet of the MAC address in VM mode
         self.pin = pin
         self._pin_lock = threading.Lock()
         self.job_queue = queue.Queue()
@@ -84,7 +85,14 @@ class Worker:
             first_attempt_time = datetime.now()
             while retries < self.POWER_UP_MAX_RETRIES:
                 if VM_MODE:
-                    log.info("No power up needed for VM Mode. Skipping GPIO activation for workier %s (try #%d)", self.id, retries)
+                    log.info("Power on VM for worker %s (try #%d)", self.id, retries)
+                    #Start vms with nc
+                    nc = Netcat(NC_IP, NC_PORT)
+                    MAC = "DE:AD:BE:EF:00" + self.pin
+                    KVM_COMMAND = "kvm -M microvm -vga none -nodefaults -no-user-config -nographic -kernel ~/bzImage  -append "ip=dhcp root=/dev/ram0 rootfstype=ramfs rdinit=/sbin/init console=ttyS0" -netdev tap,id=net0,script=test/ifup.sh,downscript=test/ifdown.sh    -device virtio-net-device,netdev=net0,mac=" + MAC
+                    nc.write(KVM_COMMAND.encode())
+                    nc.close()
+
                 else:
                     log.info(
                         "Attempting to power up worker %s (try #%d)", self.id, retries
@@ -392,7 +400,7 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
             # Worker's queue has been empty since the connection began
             if VM_MODE:
                 nc = Netcat(NC_IP, NC_PORT)
-                nc.write(("pkill -of \"" + w.pin + "\"").encode())
+                nc.write(("pkill -of \"" + w.pin + "\"\n").encode())
                 nc.close()
             else:
                 self.request.sendall((SHUTDOWN_PAYLOAD + "\n").encode(encoding="ascii"))
@@ -428,7 +436,7 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
             log.info("Worker %s's queue is empty. Sending shutdown payload.", self.worker_id)
             if VM_MODE:
                 nc = Netcat(NC_IP, NC_PORT)
-                nc.write(("pkill -of \"" + w.pin + "\"").encode())
+                nc.write(("pkill -of \"" + w.pin + "\"\n").encode())
                 nc.close()
             else:
                 self.request.sendall((SHUTDOWN_PAYLOAD + "\n").encode(encoding="ascii"))
