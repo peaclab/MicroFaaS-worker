@@ -89,7 +89,7 @@ class Worker:
                     #Start vms with nc
                     nc = Netcat(NC_IP, NC_PORT)
                     MAC = "DE:AD:BE:EF:00" + self.pin
-                    BOOTARGS = "ip=192.168.1.10" + self.pin + "::192.168.1.1:255.255.255.0:worker" + self.pin + ":eth0:off:1.1.1.1:8.8.8.8:209.50.63.74" + "root=/dev/ram0 rootfstype=ramfs rdinit=/sbin/init console=ttyS0"
+                    BOOTARGS = "ip=192.168.1.10" + self.pin + "::192.168.1.1:255.255.255.0:worker" + self.pin + ":eth0:off:1.1.1.1:8.8.8.8:209.50.63.74 " + "root=/dev/ram0 rootfstype=ramfs rdinit=/sbin/init console=ttyS0"
                     KVM_COMMAND = "kvm -M microvm -vga none -nodefaults -no-user-config -nographic -kernel ~/bzImage  -append \"" + BOOTARGS + "\" -netdev tap,id=net0,script=test/ifup.sh,downscript=test/ifdown.sh    -device virtio-net-device,netdev=net0,mac=" + MAC
                     log.debug("Sending nc command: " + KVM_COMMAND)
                     nc.write(KVM_COMMAND.encode())
