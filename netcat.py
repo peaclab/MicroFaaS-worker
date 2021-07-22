@@ -1,5 +1,5 @@
 import socket
- 
+ # netcat.py from: https://gist.github.com/leonjza/f35a7252babdf77c8421
 class Netcat:
 
     """ Python 'netcat like' module """
