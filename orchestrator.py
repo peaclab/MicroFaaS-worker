@@ -41,7 +41,7 @@ NC_PORT = 8888
 HOST, PORT = "", 63302
 
 # Log Level
-log.basicConfig(level=log.DEBUG)
+log.basicConfig(level=log.INFO)
 
 # How many total functions to run across all workers
 FUNC_EXEC_COUNT = 10000
@@ -75,9 +75,7 @@ class Worker:
         """
         Power up a worker by pulsing its PWR_BUT line low for 500ms
         """
-        if VM_MODE:
-            return
-            
+
         # This "with" statement blocks until it can acquire the pin lock
         log.debug("Worker %s attempting to acquire pin lock on %s", self.id, self.pin)
         with self._pin_lock:
@@ -85,12 +83,15 @@ class Worker:
             retries = 0
             first_attempt_time = datetime.now()
             while retries < self.POWER_UP_MAX_RETRIES:
-                log.info(
-                    "Attempting to power up worker %s (try #%d)", self.id, retries
-                )
-                GPIO.output(self.pin, GPIO.LOW)
-                time.sleep(self.BTN_PRESS_DELAY)
-                GPIO.output(self.pin, GPIO.HIGH)
+                if VM_MODE:
+                    log.info("No power up needed for VM Mode. Skipping GPIO activation for workier %s (try #%d)", self.id, retries)
+                else:
+                    log.info(
+                        "Attempting to power up worker %s (try #%d)", self.id, retries
+                    )
+                    GPIO.output(self.pin, GPIO.LOW)
+                    time.sleep(self.BTN_PRESS_DELAY)
+                    GPIO.output(self.pin, GPIO.HIGH)
 
                 if wait_for_connection:
                     log.debug(
