@@ -18,6 +18,11 @@ from numpy import random as nprand
 from datetime import datetime, timedelta
 import Adafruit_BBIO.GPIO as GPIO
 
+# Check command line argument for VM flag
+parser = argparse.ArgumentParser()
+parser.add_argument('--vm', action='store_true')
+VM_MODE = parser.parse_args().vm
+
 # TCP Server Setup
 # Host "" means bind to all interfaces
 # Port 0 means to select an arbitrary unused port
@@ -474,10 +479,6 @@ def health_monitor(timeout=120):
     log.info("Health monitor exiting (all queues empty)")
 
 if __name__ == "__main__":
-    # Check command line argument for VM flag
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--vm', action='store_true')
-    VM_MODE = parser.parse_args().vm
 
     # Set up CSV writer
     writer = ThreadsafeCSVWriter(datetime.now().strftime("%Y%m%d.%H%M%S")+".microfaas-log.csv")
