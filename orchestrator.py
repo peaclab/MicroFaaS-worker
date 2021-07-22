@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from json.decoder import JSONDecodeError
+import argparse
 import os
 import socket
 import threading
@@ -473,6 +474,10 @@ def health_monitor(timeout=120):
     log.info("Health monitor exiting (all queues empty)")
 
 if __name__ == "__main__":
+    # Check command line argument for VM flag
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--vm', action='store_true')
+    VM_MODE = parser.parse_args().vm
 
     # Set up CSV writer
     writer = ThreadsafeCSVWriter(datetime.now().strftime("%Y%m%d.%H%M%S")+".microfaas-log.csv")
