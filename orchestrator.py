@@ -1,27 +1,39 @@
 #!/usr/bin/env python3
-from json.decoder import JSONDecodeError
-import argparse
-import os
-import socket
-import threading
-import socketserver
-import queue
-import time
-import random
-import string
-import json
-import csv
-import logging as log
-from zlib import compress
-from binascii import hexlify
-from numpy import random as nprand
-from datetime import datetime, timedelta
 import Adafruit_BBIO.GPIO as GPIO
+import argparse
+import csv
+import json
+import logging as log
+import os
+import queue
+import random
+import socket
+import socketserver
+import string
+import threading
+import time
+
+from binascii import hexlify
+from datetime import datetime, timedelta
+from json.decoder import JSONDecodeError
+from netcat import Netcat
+from numpy import random as nprand
+from zlib import compress
+
+
+
+
 
 # Check command line argument for VM flag
 parser = argparse.ArgumentParser()
 parser.add_argument('--vm', action='store_true')
 VM_MODE = parser.parse_args().vm
+if VM_MODE:
+    print("VM Mode Activated :D")
+
+# NC Server IP
+NC_IP = '127.0.0.1'
+NC_PORT = 8888
 
 # TCP Server Setup
 # Host "" means bind to all interfaces
@@ -29,7 +41,7 @@ VM_MODE = parser.parse_args().vm
 HOST, PORT = "", 63302
 
 # Log Level
-log.basicConfig(level=log.INFO)
+log.basicConfig(level=log.DEBUG)
 
 # How many total functions to run across all workers
 FUNC_EXEC_COUNT = 10000
@@ -53,15 +65,19 @@ class Worker:
         self._power_up_thread_terminate = False
 
         # Setup GPIO lines
-        with self._pin_lock:
-            log.debug("Setting pin %s to output HIGH for worker %s", self.pin, self.id)
-            GPIO.setup(pin, GPIO.OUT)
-            GPIO.output(pin, GPIO.HIGH)
+        if not VM_MODE:
+            with self._pin_lock:
+                log.debug("Setting pin %s to output HIGH for worker %s", self.pin, self.id)
+                GPIO.setup(pin, GPIO.OUT)
+                GPIO.output(pin, GPIO.HIGH)
 
     def power_up(self, wait_for_connection=True):
         """
         Power up a worker by pulsing its PWR_BUT line low for 500ms
         """
+        if VM_MODE:
+            return
+            
         # This "with" statement blocks until it can acquire the pin lock
         log.debug("Worker %s attempting to acquire pin lock on %s", self.id, self.pin)
         with self._pin_lock:
@@ -223,20 +239,28 @@ class ThreadsafeCSVWriter:
 # Mapping of worker IDs to GPIO lines
 # We assume the ID# also maps to the last octet of the worker's IP
 # e.g., if the orchestrator is 192.168.1.2, and workers are 192.168.1.3-12, this should be range(3, 13)
-WORKERS = {
-    "3": Worker(3, "P9_15"),
-    "4": Worker(4, "P9_23"),
-    "5": Worker(5, "P9_25"),
-    "6": Worker(6, "P9_27"),
-    "7": Worker(7, "P8_8"),
-    "8": Worker(8, "P8_10"),
-    "9": Worker(9, "P8_12"),
-    "10": Worker(10, "P8_14"),
-    "11": Worker(11, "P8_26"),
-    "12": Worker(12, "P9_12"),
-}
+if VM_MODE:
+    WORKERS = {
+    "3": Worker(3, ":03"),
+    "4": Worker(4, ":04"),
+    "5": Worker(5, ":05"),
+    }
+else:
+    WORKERS = {
+        "3": Worker(3, "P9_15"),
+        "4": Worker(4, "P9_23"),
+        "5": Worker(5, "P9_25"),
+        "6": Worker(6, "P9_27"),
+        "7": Worker(7, "P8_8"),
+        "8": Worker(8, "P8_10"),
+        "9": Worker(9, "P8_12"),
+        "10": Worker(10, "P8_14"),
+        "11": Worker(11, "P8_26"),
+        "12": Worker(12, "P9_12"),
+    }
 
 # JSON payload to send when we want the worker to power down or reboot
+
 SHUTDOWN_PAYLOAD = json.dumps(
     {
         "i_id": "PWROFF",
@@ -365,7 +389,12 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
             log.debug(job_json)
         except queue.Empty:
             # Worker's queue has been empty since the connection began
-            self.request.sendall((SHUTDOWN_PAYLOAD + "\n").encode(encoding="ascii"))
+            if VM_MODE:
+                nc = Netcat(NC_IP, NC_PORT)
+                nc.write(("pkill -of \"" + w.pin + "\"").encode())
+                nc.close()
+            else:
+                self.request.sendall((SHUTDOWN_PAYLOAD + "\n").encode(encoding="ascii"))
             log.warning(
                 "Worker %s requested work while queue empty. Shutdown payload sent.",
                 self.worker_id,
@@ -396,7 +425,12 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         # If yes, send reboot. Otherwise send shutdown
         if w.job_queue.empty():
             log.info("Worker %s's queue is empty. Sending shutdown payload.", self.worker_id)
-            self.request.sendall((SHUTDOWN_PAYLOAD + "\n").encode(encoding="ascii"))
+            if VM_MODE:
+                nc = Netcat(NC_IP, NC_PORT)
+                nc.write(("pkill -of \"" + w.pin + "\"").encode())
+                nc.close()
+            else:
+                self.request.sendall((SHUTDOWN_PAYLOAD + "\n").encode(encoding="ascii"))
         else:
             log.debug("Finished handling worker %s. Sending reboot payload.", self.worker_id)
             self.request.sendall((REBOOT_PAYLOAD + "\n").encode(encoding="ascii"))
