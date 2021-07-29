@@ -5,38 +5,38 @@ import micropg as p
 import json
 import ubinascii
 
-# try:
-#     from ulab import numpy as np
-#     from ulab import scipy as spy
-# except:
-#     import numpy as np
-#     import scipy as spy
-# try:
-#     import utime as time
-# except:
-#     import time
-# try:
-#     import uhashlib as hashlib
-# except:
-#     import hashlib
-# try:
-#     import ubinascii as binascii
-# except:
-#     import binascii
-# try:
-#     import uzlib as zlib
-# except:
-#     import zlib
-# try:
-#     import ure as re
-# except:
-#     import re
-# import ucryptolib
+try:
+    from ulab import numpy as np
+    from ulab import scipy as spy
+except:
+    import numpy as np
+    import scipy as spy
+try:
+    import utime as time
+except:
+    import time
+try:
+    import uhashlib as hashlib
+except:
+    import hashlib
+try:
+    import ubinascii as binascii
+except:
+    import binascii
+try:
+    import uzlib as zlib
+except:
+    import zlib
+try:
+    import ure as re
+except:
+    import re
+import ucryptolib
 
-# try:
-#     import picoredis as pr
-# except:
-#     import redis as pr
+try:
+    import picoredis as pr
+except:
+    import redis as pr
 
 try:
     import urequests as urq
