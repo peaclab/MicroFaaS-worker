@@ -2,39 +2,41 @@ import math
 import sys
 import random
 import micropg as p
+import json
+import ubinascii
 
-try:
-    from ulab import numpy as np
-    from ulab import scipy as spy
-except:
-    import numpy as np
-    import scipy as spy
-try:
-    import utime as time
-except:
-    import time
-try:
-    import uhashlib as hashlib
-except:
-    import hashlib
-try:
-    import ubinascii as binascii
-except:
-    import binascii
-try:
-    import uzlib as zlib
-except:
-    import zlib
-try:
-    import ure as re
-except:
-    import re
-import ucryptolib
+# try:
+#     from ulab import numpy as np
+#     from ulab import scipy as spy
+# except:
+#     import numpy as np
+#     import scipy as spy
+# try:
+#     import utime as time
+# except:
+#     import time
+# try:
+#     import uhashlib as hashlib
+# except:
+#     import hashlib
+# try:
+#     import ubinascii as binascii
+# except:
+#     import binascii
+# try:
+#     import uzlib as zlib
+# except:
+#     import zlib
+# try:
+#     import ure as re
+# except:
+#     import re
+# import ucryptolib
 
-try:
-    import picoredis as pr
-except:
-    import redis as pr
+# try:
+#     import picoredis as pr
+# except:
+#     import redis as pr
 
 try:
     import urequests as urq
@@ -291,6 +293,7 @@ def psql_purchase(params):
         conn.commit()
 
         cur.close()
+        return True
 
     except:
         return False
@@ -308,6 +311,7 @@ def upload_file(params):
             return False
 
         urq.request("PUT", url, data=fi)
+        return True
     except:
         return False
 
@@ -325,6 +329,50 @@ def download_file(params):
             return False
     except:
         return False
+
+def upload_kafka(params):
+    try:
+        url='http://192.168.1.166:8081'
+        # Post new message to topic
+        posting_url = url + '/topics/' + params["topic"]
+        body_dict = {
+        "records" : [ {
+            "value" : params["message"],
+            "partition" : 0
+        }]
+        }
+        body_json= json.dumps(body_dict)
+        res =urq.post(url = posting_url, headers = {'content-type': 'application/vnd.kafka.json.v2+json','accept': 'application/vnd.kafka.v2+json'},data = body_json)
+
+        # Commit posted message
+        commiting_url = url + '/consumers/' + str(params["groupID"]) + '/instances/' + params["consumerID"] + '/offsets'
+        body_dict = {
+        "offsets" : [ {
+            "topic" : params["topic"],
+            "partition" : 0,
+            "offset" : 0
+        } ]
+        }
+        body_json= json.dumps(body_dict)
+        res =urq.post(url = commiting_url, headers = {'content-type': 'application/vnd.kafka.v2+json','accept': 'application/vnd.kafka.v2+json'},data = body_json)
+        return True
+    except:
+        return False
+
+
+def read_kafka(params):
+    try:
+        url='http://192.168.1.166:8081'
+        # Read committed message
+        reading_url = url + '/consumers/' + str(params["groupID"]) + '/instances/' + params["consumerID"] + '/records'
+        res =urq.get(url = reading_url, headers = {'accept': 'application/vnd.kafka.binary.v2+json'})
+        # Convert response into text and then json. Then, index the value key and convert from Base 64 to byte string to Unicode string
+        message = ubinascii.a2b_base64(json.loads(res.text)[0]["value"]).decode("utf-8")
+        return message
+    except:
+        return False
+
+
 
 
 # Dictionary mapping available function names to their IDs
