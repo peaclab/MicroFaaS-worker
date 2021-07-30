@@ -356,6 +356,12 @@ COMMANDS = {
         }
         for _ in range(10)
     ],
+    "psql_purchase": [
+        {  # id is a rand int upto 60
+            "id": random.randint(1, 60)
+        }
+        for _ in range(10)
+    ],
 }
 # Reset seeds to "truly" random
 random.seed()
