@@ -44,7 +44,7 @@ HOST, PORT = "", 63302
 log.basicConfig(level=log.INFO)
 
 # How many total functions to run across all workers
-FUNC_EXEC_COUNT = 10000
+FUNC_EXEC_COUNT = 200
 
 # How often to populate queues (seconds)
 LOAD_GEN_PERIOD = 1
@@ -261,13 +261,13 @@ else:
         "3": Worker(3, "P9_15"),
         "4": Worker(4, "P9_23"),
         "5": Worker(5, "P9_25"),
-        "6": Worker(6, "P9_27"),
-        "7": Worker(7, "P8_8"),
-        "8": Worker(8, "P8_10"),
-        "9": Worker(9, "P8_12"),
-        "10": Worker(10, "P8_14"),
-        "11": Worker(11, "P8_26"),
-        "12": Worker(12, "P9_12"),
+        # "6": Worker(6, "P9_27"),
+        # "7": Worker(7, "P8_8"),
+        # "8": Worker(8, "P8_10"),
+        # "9": Worker(9, "P8_12"),
+        # "10": Worker(10, "P8_14"),
+        # "11": Worker(11, "P8_26"),
+        # "12": Worker(12, "P9_12"),
     }
 
 # JSON payload to send when we want the worker to power down or reboot
@@ -356,6 +356,20 @@ COMMANDS = {
         }
         for _ in range(10)
     ],
+    "redis_modify": [
+    	  {
+    	      "id": "".join(random.choice(["Jenny", "Jack", "Joe"])),
+    	      "spend": "".join(random.choices(string.digits, k=3))
+    	  }
+    	  for _ in range(10)
+    ],
+    "redis_insert": [
+    	  {
+    	      "id": "".join(random.choices(string.digits, k=10)),
+    	      "balance": "".join(random.choices(string.digits, k=3))
+    	  }
+    	  for _ in range(10)
+    ],
     "psql_inventory": [
         # this workload doesn't actually need input, but we need something here
         # so the load generator will schedule it
@@ -388,7 +402,37 @@ COMMANDS = {
         {"file": "file_example_ODS_5000.ods"},
         {"file": "file_example_PPT_1MB.ppt"},
     ],
+    "redis_modify": [
+        {
+            "id": "".join(random.choice(["Jenny", "Jack", "Joe"])),
+            "spend": str(random.randint(0,999))
+    	}
+        for _ in range(10)
+    ],
+    "redis_insert": [
+        {
+            "id": str(random.randint(1000000,9999999)),
+            "balance": str(random.randint(0,999))
+    	}
+    	for _ in range(10)
+    ],
+    "upload_kafka": [
+        {
+            "groupID": 2,
+            "consumerID" : "br1-780e17d8-549d-4531-ac95-c29afa751d5e",
+            "topic" : "SampleTopic",
+            "message" : "Hello World ".join(random.choices(string.digits, k=10))
+        }
+        for _ in range(10)
+    ],
+    "read_kafka": [
+        {
+            "groupID": 2,
+            "consumerID" : "br1-780e17d8-549d-4531-ac95-c29afa751d5e"
+        }
+    ]
 }
+
 # Reset seeds to "truly" random
 random.seed()
 nprand.seed()
