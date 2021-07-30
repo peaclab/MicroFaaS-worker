@@ -402,6 +402,21 @@ COMMANDS = {
         {"file": "file_example_ODS_5000.ods"},
         {"file": "file_example_PPT_1MB.ppt"},
     ],
+        "redis_modify": [
+    	{
+    	    "id": "".join(random.choice(["Jenny", "Jack", "Joe"])),
+    	    "spend": str(random.randint(0,999))
+    	}
+    	for _ in range(10)
+    ],
+    "redis_insert": [
+    	{
+    	    "id": str(random.randint(1000000,9999999)),
+    	    "balance": str(random.randint(0,999))
+    	}
+    	for _ in range(10)
+    ]
+}
 }
 # Reset seeds to "truly" random
 random.seed()
