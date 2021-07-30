@@ -1,21 +1,39 @@
 #!/usr/bin/env python3
-from json.decoder import JSONDecodeError
-import os
-import socket
-import threading
-import socketserver
-import queue
-import time
-import random
-import string
-import json
-import csv
-import logging as log
-from zlib import compress
-from binascii import hexlify
-from numpy import random as nprand
-from datetime import datetime, timedelta
 import Adafruit_BBIO.GPIO as GPIO
+import argparse
+import csv
+import json
+import logging as log
+import os
+import queue
+import random
+import socket
+import socketserver
+import string
+import threading
+import time
+
+from binascii import hexlify
+from datetime import datetime, timedelta
+from json.decoder import JSONDecodeError
+from netcat import Netcat
+from numpy import random as nprand
+from zlib import compress
+
+
+
+
+
+# Check command line argument for VM flag
+parser = argparse.ArgumentParser()
+parser.add_argument('--vm', action='store_true')
+VM_MODE = parser.parse_args().vm
+if VM_MODE:
+    print("VM Mode Activated :D")
+
+# NC Server IP
+NC_IP = '127.0.0.1'
+NC_PORT = 8888
 
 # TCP Server Setup
 # Host "" means bind to all interfaces
@@ -26,7 +44,7 @@ HOST, PORT = "", 63302
 log.basicConfig(level=log.INFO)
 
 # How many total functions to run across all workers
-FUNC_EXEC_COUNT = 10000
+FUNC_EXEC_COUNT = 200
 
 # How often to populate queues (seconds)
 LOAD_GEN_PERIOD = 1
@@ -38,6 +56,7 @@ class Worker:
 
     def __init__(self, id, pin) -> None:
         self.id = id
+        # self.pin is the last octet of the MAC address in VM mode
         self.pin = pin
         self._pin_lock = threading.Lock()
         self.job_queue = queue.Queue()
@@ -47,15 +66,17 @@ class Worker:
         self._power_up_thread_terminate = False
 
         # Setup GPIO lines
-        with self._pin_lock:
-            log.debug("Setting pin %s to output HIGH for worker %s", self.pin, self.id)
-            GPIO.setup(pin, GPIO.OUT)
-            GPIO.output(pin, GPIO.HIGH)
+        if not VM_MODE:
+            with self._pin_lock:
+                log.debug("Setting pin %s to output HIGH for worker %s", self.pin, self.id)
+                GPIO.setup(pin, GPIO.OUT)
+                GPIO.output(pin, GPIO.HIGH)
 
     def power_up(self, wait_for_connection=True):
         """
         Power up a worker by pulsing its PWR_BUT line low for 500ms
         """
+
         # This "with" statement blocks until it can acquire the pin lock
         log.debug("Worker %s attempting to acquire pin lock on %s", self.id, self.pin)
         with self._pin_lock:
@@ -63,12 +84,24 @@ class Worker:
             retries = 0
             first_attempt_time = datetime.now()
             while retries < self.POWER_UP_MAX_RETRIES:
-                log.info(
-                    "Attempting to power up worker %s (try #%d)", self.id, retries
-                )
-                GPIO.output(self.pin, GPIO.LOW)
-                time.sleep(self.BTN_PRESS_DELAY)
-                GPIO.output(self.pin, GPIO.HIGH)
+                if VM_MODE:
+                    log.info("Power on VM for worker %s (try #%d)", self.id, retries)
+                    #Start vms with nc
+                    nc = Netcat(NC_IP, NC_PORT)
+                    MAC = "DE:AD:BE:EF:00" + self.pin
+                    BOOTARGS = "ip=192.168.1.10" + self.pin + "::192.168.1.1:255.255.255.0:worker" + self.pin + ":eth0:off:1.1.1.1:8.8.8.8:209.50.63.74 " + "root=/dev/ram0 rootfstype=ramfs rdinit=/sbin/init console=ttyS0"
+                    KVM_COMMAND = "kvm -M microvm -vga none -nodefaults -no-user-config -nographic -kernel ~/bzImage  -append \"" + BOOTARGS + "\" -netdev tap,id=net0,script=test/ifup.sh,downscript=test/ifdown.sh    -device virtio-net-device,netdev=net0,mac=" + MAC
+                    log.debug("Sending nc command: " + KVM_COMMAND)
+                    nc.write(KVM_COMMAND.encode())
+                    nc.close()
+
+                else:
+                    log.info(
+                        "Attempting to power up worker %s (try #%d)", self.id, retries
+                    )
+                    GPIO.output(self.pin, GPIO.LOW)
+                    time.sleep(self.BTN_PRESS_DELAY)
+                    GPIO.output(self.pin, GPIO.HIGH)
 
                 if wait_for_connection:
                     log.debug(
@@ -217,20 +250,28 @@ class ThreadsafeCSVWriter:
 # Mapping of worker IDs to GPIO lines
 # We assume the ID# also maps to the last octet of the worker's IP
 # e.g., if the orchestrator is 192.168.1.2, and workers are 192.168.1.3-12, this should be range(3, 13)
-WORKERS = {
-    "3": Worker(3, "P9_15"),
-    "4": Worker(4, "P9_23"),
-    "5": Worker(5, "P9_25"),
-    "6": Worker(6, "P9_27"),
-    "7": Worker(7, "P8_8"),
-    "8": Worker(8, "P8_10"),
-    "9": Worker(9, "P8_12"),
-    "10": Worker(10, "P8_14"),
-    "11": Worker(11, "P8_26"),
-    "12": Worker(12, "P9_12"),
-}
+if VM_MODE:
+    WORKERS = {
+        "3": Worker(3, ":03"),
+        "4": Worker(4, ":04"),
+        "5": Worker(5, ":05"),
+    }
+else:
+    WORKERS = {
+        "3": Worker(3, "P9_15"),
+        "4": Worker(4, "P9_23"),
+        "5": Worker(5, "P9_25"),
+        # "6": Worker(6, "P9_27"),
+        # "7": Worker(7, "P8_8"),
+        # "8": Worker(8, "P8_10"),
+        # "9": Worker(9, "P8_12"),
+        # "10": Worker(10, "P8_14"),
+        # "11": Worker(11, "P8_26"),
+        # "12": Worker(12, "P9_12"),
+    }
 
 # JSON payload to send when we want the worker to power down or reboot
+
 SHUTDOWN_PAYLOAD = json.dumps(
     {
         "i_id": "PWROFF",
@@ -315,7 +356,83 @@ COMMANDS = {
         }
         for _ in range(10)
     ],
+    "redis_modify": [
+    	  {
+    	      "id": "".join(random.choice(["Jenny", "Jack", "Joe"])),
+    	      "spend": "".join(random.choices(string.digits, k=3))
+    	  }
+    	  for _ in range(10)
+    ],
+    "redis_insert": [
+    	  {
+    	      "id": "".join(random.choices(string.digits, k=10)),
+    	      "balance": "".join(random.choices(string.digits, k=3))
+    	  }
+    	  for _ in range(10)
+    ],
+    "psql_inventory": [
+        # this workload doesn't actually need input, but we need something here
+        # so the load generator will schedule it
+        {"a": 0},
+        {"a": 1},
+        {"a": 2},
+        {"a": 4},
+    ],
+    "psql_purchase": [
+        {  # id is a rand int upto 60
+            "id": random.randint(1, 60)
+        }
+        for _ in range(10)
+    ],
+    "upload_file": [
+        # we upload files that already exist in workers' initramfs (specifically in /etc)
+        # in order to avoid adding or generating dummy files at runtime 
+        {"file": "group"},
+        {"file": "hostname"},
+        {"file": "hosts"},
+        {"file": "inittab"},
+        {"file": "passwd"},
+        {"file": "profile"},
+        {"file": "resolv.conf"},
+        {"file": "shadow"},
+    ],
+    "download_file": [
+        # we assume these files already exist in the MinIO filestore 
+        {"file": "file-sample_1MB.doc"},
+        {"file": "file_example_ODS_5000.ods"},
+        {"file": "file_example_PPT_1MB.ppt"},
+    ],
+    "redis_modify": [
+        {
+            "id": "".join(random.choice(["Jenny", "Jack", "Joe"])),
+            "spend": str(random.randint(0,999))
+    	}
+        for _ in range(10)
+    ],
+    "redis_insert": [
+        {
+            "id": str(random.randint(1000000,9999999)),
+            "balance": str(random.randint(0,999))
+    	}
+    	for _ in range(10)
+    ],
+    "upload_kafka": [
+        {
+            "groupID": 2,
+            "consumerID" : "br1-780e17d8-549d-4531-ac95-c29afa751d5e",
+            "topic" : "SampleTopic",
+            "message" : "Hello World ".join(random.choices(string.digits, k=10))
+        }
+        for _ in range(10)
+    ],
+    "read_kafka": [
+        {
+            "groupID": 2,
+            "consumerID" : "br1-780e17d8-549d-4531-ac95-c29afa751d5e"
+        }
+    ]
 }
+
 # Reset seeds to "truly" random
 random.seed()
 nprand.seed()
@@ -359,7 +476,12 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
             log.debug(job_json)
         except queue.Empty:
             # Worker's queue has been empty since the connection began
-            self.request.sendall((SHUTDOWN_PAYLOAD + "\n").encode(encoding="ascii"))
+            if VM_MODE:
+                nc = Netcat(NC_IP, NC_PORT)
+                nc.write(("pkill -of \"" + w.pin + "\"\n").encode())
+                nc.close()
+            else:
+                self.request.sendall((SHUTDOWN_PAYLOAD + "\n").encode(encoding="ascii"))
             log.warning(
                 "Worker %s requested work while queue empty. Shutdown payload sent.",
                 self.worker_id,
@@ -390,7 +512,12 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         # If yes, send reboot. Otherwise send shutdown
         if w.job_queue.empty():
             log.info("Worker %s's queue is empty. Sending shutdown payload.", self.worker_id)
-            self.request.sendall((SHUTDOWN_PAYLOAD + "\n").encode(encoding="ascii"))
+            if VM_MODE:
+                nc = Netcat(NC_IP, NC_PORT)
+                nc.write(("pkill -of \"" + w.pin + "\"\n").encode())
+                nc.close()
+            else:
+                self.request.sendall((SHUTDOWN_PAYLOAD + "\n").encode(encoding="ascii"))
         else:
             log.debug("Finished handling worker %s. Sending reboot payload.", self.worker_id)
             self.request.sendall((REBOOT_PAYLOAD + "\n").encode(encoding="ascii"))
