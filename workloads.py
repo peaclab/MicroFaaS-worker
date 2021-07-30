@@ -393,5 +393,7 @@ FUNCTIONS = {
     "psql_purchase": psql_purchase,
     "fwrite": fwrite,
     "upload_file": upload_file,
-    "download_file": download_file
+    "download_file": download_file,
+    "upload_kafka": upload_kafka,
+    "read_kafka": read_kafka
 }
