@@ -356,6 +356,24 @@ COMMANDS = {
         }
         for _ in range(10)
     ],
+    "upload_file": [
+        # we upload files that already exist in workers' initramfs (specifically in /etc)
+        # in order to avoid adding or generating dummy files at runtime 
+        {"file": "group"},
+        {"file": "hostname"},
+        {"file": "hosts"},
+        {"file": "inittab"},
+        {"file": "passwd"},
+        {"file": "profile"},
+        {"file": "resolv.conf"},
+        {"file": "shadow"},
+    ],
+    "download_file": [
+        # we assume these files already exist in the MinIO filestore 
+        {"file": "file-sample_1MB.doc"},
+        {"file": "file_example_ODS_5000.ods"},
+        {"file": "file_example_PPT_1MB.ppt"},
+    ],
 }
 # Reset seeds to "truly" random
 random.seed()
