@@ -246,7 +246,7 @@ def psql_inventory():
         # Create cursor to read parameters from inventory table in ascending order by Car_Model_Year
         cur = conn.cursor()
         cur.execute(
-            "select Car_Make, Car_Model, Car_Model_Year, Number_in_Stock, id from inventory order by Car_Make"
+            "select Car_Make, Car_Model, Car_Model_Year, Number_in_Stock, id from inventory order by id"
         )
 
         allCars = cur.fetchall()
@@ -255,7 +255,7 @@ def psql_inventory():
         # Loop through all the cars that were fetched and create a string that shows all the cars in stock
         for index, car in enumerate(allCars):
             currCar = car[0] + " " + car[1] + " " + car[2]
-            retStr += str(car[4]) + ") " + currCar + ": " + str(car[3]) + " in stock\n"
+            retStr += str(car[4]) + ") " + currCar + ": " + str(car[3]) + " in stock    "
             carCount += car[3]
         retStr += "Total cars in stock: " + str(carCount)
         cur.close()
