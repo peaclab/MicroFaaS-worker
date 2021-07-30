@@ -356,6 +356,14 @@ COMMANDS = {
         }
         for _ in range(10)
     ],
+    "psql_inventory": [
+        # this workload doesn't actually need input, but we need something here
+        # so the load generator will schedule it
+        {"a": 0},
+        {"a": 1},
+        {"a": 2},
+        {"a": 4},
+    ],
     "psql_purchase": [
         {  # id is a rand int upto 60
             "id": random.randint(1, 60)
