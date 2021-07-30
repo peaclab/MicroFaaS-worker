@@ -356,6 +356,20 @@ COMMANDS = {
         }
         for _ in range(10)
     ],
+    "redis_modify": [
+    	{
+    	    "id": "".join(random.choice(["Jenny", "Jack", "Joe"])),
+    	    "spend": "".join(random.choices(string.digits, k=3))
+    	}
+    	for _ in range(10)
+    ],
+    "redis_insert": [
+    	{
+    	    "id": "".join(random.choices(string.digits, k=10)),
+    	    "balance": "".join(random.choices(string.digits, k=3))
+    	}
+    	for _ in range(10)
+    ]
 }
 # Reset seeds to "truly" random
 random.seed()
