@@ -357,19 +357,51 @@ COMMANDS = {
         for _ in range(10)
     ],
     "redis_modify": [
-    	{
-    	    "id": "".join(random.choice(["Jenny", "Jack", "Joe"])),
-    	    "spend": "".join(random.choices(string.digits, k=3))
-    	}
-    	for _ in range(10)
+    	  {
+    	      "id": "".join(random.choice(["Jenny", "Jack", "Joe"])),
+    	      "spend": "".join(random.choices(string.digits, k=3))
+    	  }
+    	  for _ in range(10)
     ],
     "redis_insert": [
-    	{
-    	    "id": "".join(random.choices(string.digits, k=10)),
-    	    "balance": "".join(random.choices(string.digits, k=3))
-    	}
-    	for _ in range(10)
-    ]
+    	  {
+    	      "id": "".join(random.choices(string.digits, k=10)),
+    	      "balance": "".join(random.choices(string.digits, k=3))
+    	  }
+    	  for _ in range(10)
+    ],
+    "psql_inventory": [
+        # this workload doesn't actually need input, but we need something here
+        # so the load generator will schedule it
+        {"a": 0},
+        {"a": 1},
+        {"a": 2},
+        {"a": 4},
+    ],
+    "psql_purchase": [
+        {  # id is a rand int upto 60
+            "id": random.randint(1, 60)
+        }
+        for _ in range(10)
+    ],
+    "upload_file": [
+        # we upload files that already exist in workers' initramfs (specifically in /etc)
+        # in order to avoid adding or generating dummy files at runtime 
+        {"file": "group"},
+        {"file": "hostname"},
+        {"file": "hosts"},
+        {"file": "inittab"},
+        {"file": "passwd"},
+        {"file": "profile"},
+        {"file": "resolv.conf"},
+        {"file": "shadow"},
+    ],
+    "download_file": [
+        # we assume these files already exist in the MinIO filestore 
+        {"file": "file-sample_1MB.doc"},
+        {"file": "file_example_ODS_5000.ods"},
+        {"file": "file_example_PPT_1MB.ppt"},
+    ],
 }
 # Reset seeds to "truly" random
 random.seed()
