@@ -356,6 +356,12 @@ COMMANDS = {
         }
         for _ in range(10)
     ],
+    "psql_purchase": [
+        {  # id is a rand int upto 60
+            "id": random.randint(1, 60)
+        }
+        for _ in range(10)
+    ],
     "upload_file": [
         # we upload files that already exist in workers' initramfs (specifically in /etc)
         # in order to avoid adding or generating dummy files at runtime 
