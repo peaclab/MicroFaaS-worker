@@ -321,12 +321,6 @@ COMMANDS = {
             "B": nprand.random((matrix_sizes[n], matrix_sizes[n])).tolist()
         } for n in range(10)
     ],
-    "linpack": [
-        {
-            "A": nprand.random((matrix_sizes[n], matrix_sizes[n])).tolist(),
-            "B": nprand.random((matrix_sizes[n], )).tolist()
-        } for n in range(10)
-    ],
     "html_generation": [{"n": random.randint(1, 128)} for _ in range(10)],
     "pyaes": [
         {  # data is 16*n random chars, rounds is rand int upto 10k
