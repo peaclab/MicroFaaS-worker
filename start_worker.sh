@@ -4,7 +4,7 @@
 echo 1 > /proc/sys/kernel/sysrq
 
 # Start worker, with output to syslog
-cd /root
+cd /root/MicroFaaS
 micropython worker.py | logger -s -p 3 &
 
 # Failsafe Reboot (if worker.py doesn't do this for us)
