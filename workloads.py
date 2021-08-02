@@ -232,7 +232,7 @@ def redis_insert(params):
         return False
 
 
-def psql_inventory():
+def psql_inventory(params):
     try:
         # Establish connection to the postgreSQL database called bostonautosales
         conn = p.connect(
@@ -397,3 +397,4 @@ FUNCTIONS = {
     "upload_kafka": upload_kafka,
     "read_kafka": read_kafka
 }
+

@@ -1,4 +1,3 @@
-#!/sbin/micropython
 import workloads
 try:
     import usocket as socket
@@ -12,13 +11,10 @@ try:
     import utime as time
 except:
     import time
-
 def shutdown():
     return workloads.fwrite({'path': "/proc/sysrq-trigger", 'data': "o"})
-
 def reboot():
     return workloads.fwrite({'path': "/proc/sysrq-trigger", 'data': "b"})
-
 
 s = socket.socket()
 ai = socket.getaddrinfo("192.168.1.2", 63302)
