@@ -96,9 +96,7 @@ def linpack(params):
 
     mflops = ops * 1e-6 / latency
 
-    result = {"mflops": mflops, "latency": latency}
-
-    return result
+    return latency
 
 
 # Inspired by https://github.com/kmu-bigdata/serverless-faas-workbench/blob/master/aws/cpu-memory/chameleon/lambda_function.py
