@@ -74,6 +74,9 @@ workloads.FUNCTIONS[cmd['f_id']](cmd['f_args'])
 
 # Then we'll probably be forcibly rebooted/shutdown
 
+# Sleep to prevent race condition between poweroff and reboot
+time.sleep(1)
+
 # If we make it here, things are getting weird
 print("WARN: Follow-up command allowed execution to continue. Rebooting...")
 

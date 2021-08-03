@@ -44,7 +44,7 @@ HOST, PORT = "", 63302
 log.basicConfig(level=log.INFO)
 
 # How many total functions to run across all workers
-FUNC_EXEC_COUNT = 200
+FUNC_EXEC_COUNT = 10
 
 # How often to populate queues (seconds)
 LOAD_GEN_PERIOD = 1
@@ -319,12 +319,6 @@ COMMANDS = {
         {
             "A": nprand.random((matrix_sizes[n], matrix_sizes[n])).tolist(),
             "B": nprand.random((matrix_sizes[n], matrix_sizes[n])).tolist()
-        } for n in range(10)
-    ],
-    "linpack": [
-        {
-            "A": nprand.random((matrix_sizes[n], matrix_sizes[n])).tolist(),
-            "B": nprand.random((matrix_sizes[n], )).tolist()
         } for n in range(10)
     ],
     "html_generation": [{"n": random.randint(1, 128)} for _ in range(10)],

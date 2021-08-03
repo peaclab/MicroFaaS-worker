@@ -1,0 +1,16 @@
+47c47
+< FUNC_EXEC_COUNT = 10
+---
+> FUNC_EXEC_COUNT = 30
+324,329d323
+<     "linpack": [
+<         {
+<             "A": nprand.random((matrix_sizes[n], matrix_sizes[n])).tolist(),
+<             "B": nprand.random((matrix_sizes[n], )).tolist()
+<         } for n in range(10)
+<     ],
+643c637
+<         server.shutdown()
+---
+>         server.shutdown()
+\ No newline at end of file
