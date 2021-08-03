@@ -539,7 +539,13 @@ def load_generator(count):
     while count > 0:
         for _, w in random.sample(WORKERS.items(), random.randint(1,len(WORKERS))):
             q_was_empty = w.job_queue.empty()
-            f_id = random.choice(list(COMMANDS.keys()))
+            
+            try:
+                f_id = random.choice(list(COMMANDS.keys()))
+            except IndexError as e:
+                log.debug("COMMANDS is empty, continuing...")
+                continue
+
             cmd = {
                 # Invocation ID
                 "i_id": "".join(
