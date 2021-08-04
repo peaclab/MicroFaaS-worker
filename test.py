@@ -32,8 +32,8 @@ if VM_MODE:
     print("VM Mode Activated :D")
 
 # NC Server IP
-NC_IP = '127.0.0.1'
-NC_PORT = 8888
+NC_IP = '192.168.1.201'
+NC_PORT = 1152
 
 # TCP Server Setup
 # Host "" means bind to all interfaces
@@ -44,7 +44,7 @@ HOST, PORT = "", 63302
 log.basicConfig(level=log.INFO)
 
 # How many total functions to run across all workers
-FUNC_EXEC_COUNT = 10
+FUNC_EXEC_COUNT = 200
 
 # How often to populate queues (seconds)
 LOAD_GEN_PERIOD = 1
@@ -89,10 +89,11 @@ class Worker:
                     #Start vms with nc
                     nc = Netcat(NC_IP, NC_PORT)
                     MAC = "DE:AD:BE:EF:00" + self.pin
-                    BOOTARGS = "ip=192.168.1.10" + self.pin + "::192.168.1.1:255.255.255.0:worker" + self.pin + ":eth0:off:1.1.1.1:8.8.8.8:209.50.63.74 " + "root=/dev/ram0 rootfstype=ramfs rdinit=/sbin/init console=ttyS0"
-                    KVM_COMMAND = "kvm -M microvm -vga none -nodefaults -no-user-config -nographic -kernel ~/bzImage  -append \"" + BOOTARGS + "\" -netdev tap,id=net0,script=test/ifup.sh,downscript=test/ifdown.sh    -device virtio-net-device,netdev=net0,mac=" + MAC
+                    BOOTARGS = "ip=192.168.1." + str(self.id) + "::192.168.1.1:255.255.255.0:worker" + str(self.id) + ":eth0:off:1.1.1.1:8.8.8.8:209.50.63.74 " + " reboot=t quiet loglevel=0 root=/dev/ram0 rootfstype=ramfs rdinit=/sbin/init console=ttyS0"
+                    KVM_COMMAND = " kvm -M microvm -vga none -no-user-config -nographic -kernel bzImage  -append \"" + BOOTARGS + "\" -netdev tap,id=net0,script=bin/ifup.sh,downscript=bin/ifdown.sh    -device virtio-net-device,netdev=net0,mac=" + MAC  + " &"
                     log.debug("Sending nc command: " + KVM_COMMAND)
-                    nc.write(KVM_COMMAND.encode())
+                    nc.write((KVM_COMMAND + " \n").encode())
+                    #nc.write("ls \n".encode())
                     nc.close()
 
                 else:
@@ -252,9 +253,9 @@ class ThreadsafeCSVWriter:
 # e.g., if the orchestrator is 192.168.1.2, and workers are 192.168.1.3-12, this should be range(3, 13)
 if VM_MODE:
     WORKERS = {
-        "3": Worker(3, ":03"),
-        "4": Worker(4, ":04"),
-        "5": Worker(5, ":05"),
+        "103": Worker(103, ":03"),
+        "104": Worker(104, ":04"),
+        "105": Worker(105, ":05"),
     }
 else:
     WORKERS = {
@@ -508,7 +509,10 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
             log.info("Worker %s's queue is empty. Sending shutdown payload.", self.worker_id)
             if VM_MODE:
                 nc = Netcat(NC_IP, NC_PORT)
-                nc.write(("pkill -of \"" + w.pin + "\"\n").encode())
+                print("STARTING TO PKILL WORKER", w.pin,"!!!!!!!!!!!!!!!!!!!!!!!!")
+                shutdownCmd=("pkill -of \"" + w.pin + "\"\n")
+                print(shutdownCmd)
+                nc.write(shutdownCmd.encode())
                 nc.close()
             else:
                 self.request.sendall((SHUTDOWN_PAYLOAD + "\n").encode(encoding="ascii"))

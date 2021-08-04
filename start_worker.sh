@@ -4,6 +4,7 @@
 echo 1 > /proc/sys/kernel/sysrq
 
 # Start worker, with output to syslog
+echo "in start worker and about to run worker.py"
 cd /root/MicroFaaS
 /sbin/micropython /root/MicroFaaS/worker.py > /dev/ttyS0
 # | logger -s -p 3

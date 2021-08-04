@@ -235,7 +235,6 @@ def psql_inventory(params):
         # Establish connection to the postgreSQL database called bostonautosales
         conn = p.connect(
             user="postgres",
-            password="postgres",
             host="192.168.1.156",
             port="5432",
             database="bostonautosales",
