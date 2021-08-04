@@ -509,9 +509,8 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
             log.info("Worker %s's queue is empty. Sending shutdown payload.", self.worker_id)
             if VM_MODE:
                 nc = Netcat(NC_IP, NC_PORT)
-                print("STARTING TO PKILL WORKER", w.pin,"!!!!!!!!!!!!!!!!!!!!!!!!")
+                log.debug("Sending pkill for worker",self.worker_id)
                 shutdownCmd=("pkill -of \"" + w.pin + "\"\n")
-                print(shutdownCmd)
                 nc.write(shutdownCmd.encode())
                 nc.close()
             else:
