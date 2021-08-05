@@ -44,7 +44,7 @@ HOST, PORT = "", 63302
 log.basicConfig(level=log.INFO)
 
 # How many total functions to run across all workers
-FUNC_EXEC_COUNT = 200
+FUNC_EXEC_COUNT = 18000
 
 # How often to populate queues (seconds)
 LOAD_GEN_PERIOD = 1
@@ -259,16 +259,16 @@ if VM_MODE:
     }
 else:
     WORKERS = {
-        "3": Worker(3, "P9_15"),
-        "4": Worker(4, "P9_23"),
-        "5": Worker(5, "P9_25"),
-        # "6": Worker(6, "P9_27"),
-        # "7": Worker(7, "P8_8"),
-        # "8": Worker(8, "P8_10"),
-        # "9": Worker(9, "P8_12"),
-        # "10": Worker(10, "P8_14"),
-        # "11": Worker(11, "P8_26"),
-        # "12": Worker(12, "P9_12"),
+        "3": Worker(3, "P9_12"),
+        "4": Worker(4, "P9_15"),
+        "5": Worker(5, "P9_23"),
+        "6": Worker(6, "P9_25"),
+        "7": Worker(7, "P9_27"),
+        "8": Worker(8, "P8_8"),
+        "9": Worker(9, "P8_10"),
+        "10": Worker(10, "P8_12"),
+        "11": Worker(11, "P8_14"),
+        "12": Worker(12, "P9_26"),
     }
 
 # JSON payload to send when we want the worker to power down or reboot
@@ -293,7 +293,7 @@ REBOOT_PAYLOAD = json.dumps(
 # SHUTDOWN_PAYLOAD = b"{\"i_id\": \"PWROFF\", \"f_id\": \"fwrite\", \"f_args\": {path}}\n"
 
 # Socket timeout
-SOCK_TIMEOUT = 90
+SOCK_TIMEOUT = 120
 # Supported workload functions and sample inputs.
 # Make sure COMMANDS.keys() matches your workers' FUNCTIONS.keys()!
 # Hardcode seeds for reproducibility
@@ -305,14 +305,14 @@ COMMANDS = {
     "cascading_sha256": [
         {  # data is 64 random chars, rounds is rand int upto 1 mil
             "data": "".join(random.choices(string.ascii_letters + string.digits, k=64)),
-            "rounds": random.randint(1, 1000000),
+            "rounds": random.randint(1, 10000),
         }
         for _ in range(10)
     ],
     "cascading_md5": [
         {  # data is 64 random chars, rounds is rand int upto 1 mil
             "data": "".join(random.choices(string.ascii_letters + string.digits, k=64)),
-            "rounds": random.randint(1, 1000000),
+            "rounds": random.randint(1, 10000),
         }
         for _ in range(10)
     ],
