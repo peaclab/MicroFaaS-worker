@@ -49,9 +49,14 @@ FUNC_EXEC_COUNT = 18000
 # How often to populate queues (seconds)
 LOAD_GEN_PERIOD = 1
 
+# How long to wait after script start before issuing startup commands
+INITIAL_HOLDOFF = 10
+
+START_TIME = datetime.now()
+
 class Worker:
     BTN_PRESS_DELAY = 0.5
-    LAST_CONNECTION_TIMEOUT = timedelta(seconds=8)
+    LAST_CONNECTION_TIMEOUT = timedelta(seconds=10)
     POWER_UP_MAX_RETRIES = 6
 
     def __init__(self, id, pin) -> None:
@@ -266,7 +271,7 @@ else:
         "7": Worker(7, "P9_27"),
         "8": Worker(8, "P8_8"),
         "9": Worker(9, "P8_10"),
-        "10": Worker(10, "P8_12"),
+        "10": Worker(10, "P8_11"),
         "11": Worker(11, "P8_14"),
         "12": Worker(12, "P9_26"),
     }
@@ -505,7 +510,7 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
 
         # Check if there's more work for it in its queue
         # If yes, send reboot. Otherwise send shutdown
-        if w.job_queue.empty():
+        if w.job_queue.empty() and datetime.now() - START_TIME > timedelta(seconds=INITIAL_HOLDOFF):
             log.info("Worker %s's queue is empty. Sending shutdown payload.", self.worker_id)
             if VM_MODE:
                 nc = Netcat(NC_IP, NC_PORT)
@@ -569,7 +574,7 @@ def load_generator(count):
                 log.info("Enough invocations of %s have been queued up, so popping from COMMANDS", f_id)
                 COMMANDS.pop(f_id, None)
 
-            if q_was_empty:
+            if q_was_empty and datetime.now() - START_TIME > timedelta(seconds=INITIAL_HOLDOFF):
                 # This worker's queue was empty, meaning it probably isn't
                 # powered on right now. Now that it has work, power it up
                 # asynchronously (so that this thread can continue)
