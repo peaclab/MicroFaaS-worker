@@ -44,13 +44,16 @@ HOST, PORT = "", 63302
 log.basicConfig(level=log.INFO)
 
 # How many total functions to run across all workers
-FUNC_EXEC_COUNT = 18000
+FUNC_EXEC_COUNT = 17000
 
 # How often to populate queues (seconds)
 LOAD_GEN_PERIOD = 1
 
 # How long to wait after script start before issuing startup commands
-INITIAL_HOLDOFF = 10
+if VM_MODE:
+    INITIAL_HOLDOFF = 0
+else:
+    INITIAL_HOLDOFF = 10
 
 START_TIME = datetime.now()
 
