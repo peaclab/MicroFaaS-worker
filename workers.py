@@ -1,21 +1,25 @@
-import threading
-import queue
-import settings as s
-from datetime import datetime
-import Adafruit_BBIO.GPIO as GPIO
 import logging as log
+import queue
 import threading
 import time
+from datetime import datetime
+
+import Adafruit_BBIO.GPIO as GPIO
+
+import settings as s
 from netcat import Netcat
+
 
 class WorkerTimeoutException(Exception):
     """Exception raised when we timed out waiting for a worker to do something"""
     pass
 
+
 class Worker:
     """
     Base class for workers
     """
+
     def __init__(self, id, pin) -> None:
         self.id = id
         # self.pin is the last octet of the MAC address in VM mode
@@ -38,14 +42,18 @@ class Worker:
         Power up a worker using a separate thread
         """
         if not self._pin_lock.locked():
-            self.power_up_thread = threading.Thread(target=self.power_up, args=(wait_for_connection,))
+            self.power_up_thread = threading.Thread(
+                target=self.power_up, args=(wait_for_connection,)
+            )
             self.power_up_thread.start()
         elif block_if_locked:
             log.warning("Waiting to acquire pin lock for %s (this is unusual)", self)
             # There's a thread already running. Join it
             self.power_up_thread.join()
             # Now create our own
-            self.power_up_thread = threading.Thread(target=self.power_up, args=(wait_for_connection,))
+            self.power_up_thread = threading.Thread(
+                target=self.power_up, args=(wait_for_connection,)
+            )
             self.power_up_thread.start()
         else:
             # There's a thread already running and user doesn't want to wait for it
@@ -58,13 +66,15 @@ class Worker:
         log.debug("Waiting for post-boot connection from %s", self)
         time.sleep(s.LAST_CONNECTION_TIMEOUT)
         if self.last_connection < first_attempt_time:
-            log.warning("No post-boot connection from %s since %s, retrying...",self,self.last_connection)
+            log.warning(
+                "No post-boot connection from %s since %s, retrying...", self, self.last_connection
+            )
             raise WorkerTimeoutException()
 
         else:
             log.debug("Successful post-boot connection from %s", self)
             return
-    
+
     def __repr__(self) -> str:
         return "Worker" + str(self.id)
 
@@ -108,9 +118,10 @@ class BBBWorker(Worker):
             # Reaching this point means we ran out of retries
             log.error("No connection from %s after %d attempts. Giving up.", self, retries)
         return
-    
+
     def __repr__(self) -> str:
         return "BBBWorker" + str(self.id)
+
 
 class VMWorker(Worker):
     def power_up(self, wait_for_connection=True):
@@ -127,11 +138,24 @@ class VMWorker(Worker):
                 log.info("Attempting to power up %s (try #%d)", self, retries)
 
                 nc = Netcat(s.NC_IP, s.NC_PORT)
-                MAC = "DE:AD:BE:EF:00" + self.pin
-                BOOTARGS = "ip=192.168.1." + str(self.id) + "::192.168.1.1:255.255.255.0:worker" + str(self.id) + ":eth0:off:1.1.1.1:8.8.8.8:209.50.63.74 " + " reboot=t quiet loglevel=0 root=/dev/ram0 rootfstype=ramfs rdinit=/sbin/init console=ttyS0"
-                KVM_COMMAND = " kvm -M microvm -vga none -no-user-config -nographic -kernel bzImage  -append \"" + BOOTARGS + "\" -netdev tap,id=net0,script=bin/ifup.sh,downscript=bin/ifdown.sh    -device virtio-net-device,netdev=net0,mac=" + MAC  + " &"
-                log.debug("Sending nc command: " + KVM_COMMAND)
-                nc.write((KVM_COMMAND + " \n").encode())
+                mac_addr = "DE:AD:BE:EF:00" + self.pin
+                boot_args = (
+                    "ip=192.168.1."
+                    + str(self.id)
+                    + "::192.168.1.1:255.255.255.0:worker"
+                    + str(self.id)
+                    + ":eth0:off:1.1.1.1:8.8.8.8:209.50.63.74 "
+                    + " reboot=t quiet loglevel=0 root=/dev/ram0 rootfstype=ramfs rdinit=/sbin/init console=ttyS0"
+                )
+                kvm_cmd = (
+                    ' kvm -M microvm -vga none -no-user-config -nographic -kernel bzImage  -append "'
+                    + boot_args
+                    + '" -netdev tap,id=net0,script=bin/ifup.sh,downscript=bin/ifdown.sh    -device virtio-net-device,netdev=net0,mac='
+                    + mac_addr
+                    + " &"
+                )
+                log.debug("Sending nc command: " + kvm_cmd)
+                nc.write((kvm_cmd + " \n").encode())
                 nc.close()
 
                 if wait_for_connection:
@@ -148,6 +172,6 @@ class VMWorker(Worker):
             # Reaching this point means we ran out of retries
             log.error("No connection from %s after %d attempts. Giving up.", self, retries)
         return
-    
+
     def __repr__(self) -> str:
         return "VMWorker" + str(self.id)
