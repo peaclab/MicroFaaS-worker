@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import Adafruit_BBIO.GPIO as GPIO
 import argparse
 import csv
 import json
@@ -12,140 +11,47 @@ import socketserver
 import string
 import threading
 import time
-import settings as s
-
 from binascii import hexlify
 from datetime import datetime, timedelta
 from json.decoder import JSONDecodeError
-from netcat import Netcat
-from numpy import random as nprand
 from zlib import compress
 
+from numpy import random as nprand
 
-# Check command line argument for VM flag
-parser = argparse.ArgumentParser()
-parser.add_argument('--vm', action='store_true')
-VM_MODE = parser.parse_args().vm
-if VM_MODE:
-    print("VM Mode Activated :D")
+import settings as s
+from workers import BBBWorker, VMWorker, WorkerHoldoffException
 
 # Log Level
 log.basicConfig(level=s.LOG_LEVEL)
 
-# How long to wait after script start before issuing startup commands
-if VM_MODE:
-    INITIAL_HOLDOFF = 0
-else:
-    INITIAL_HOLDOFF = 10
+# Check command line argument for VM flag
+parser = argparse.ArgumentParser()
+parser.add_argument('--vm', action='store_true', help="Only use VMWorkers")
+parser.add_argument('--bbb', action='store_true', help="Only use BBBWorkers")
+parser.add_argument('--ids', action="store", help="Only use workers with specified IDs in comma-separated list (may be further constrained by --vm or --bbb)")
+ARGS = parser.parse_args()
+
+# Calculate worker set
+WORKERS = s.AVAILABLE_WORKERS
+POSTFIX = ""
+if ARGS.vm and ARGS.bbb:
+    raise argparse.ArgumentError("Cannot combine options --vm and --bbb")
+elif ARGS.vm:
+    log.info("User requested we use VMWorkers only")
+    WORKERS = {k:v for k,v in WORKERS.items() if isinstance(v, VMWorker)}
+    POSTFIX = "-vm"
+elif ARGS.bbb:
+    log.info("User requested we use BBBWorkers only")
+    WORKERS = {k:v for k,v in WORKERS.items() if isinstance(v, BBBWorker)}
+    POSTFIX = "-bbb"
+
+if ARGS.ids is not None:
+    requested_ids = [int(x.strip()) for x in ARGS.ids.split(",")]
+    WORKERS = {k:v for k,v in WORKERS.items() if v.id in requested_ids}
+
+log.info("Using the following workers: %s", str(WORKERS.values()))
 
 START_TIME = datetime.now()
-
-class Worker:
-
-    def __init__(self, id, pin) -> None:
-        self.id = id
-        # self.pin is the last octet of the MAC address in VM mode
-        self.pin = pin
-        self._pin_lock = threading.Lock()
-        self.job_queue = queue.Queue()
-        self.last_connection = datetime.min
-        self.last_completion = datetime.min
-        self._power_up_thread = None
-        self._power_up_thread_terminate = False
-
-        # Setup GPIO lines
-        if not VM_MODE:
-            with self._pin_lock:
-                log.debug("Setting pin %s to output HIGH for worker %s", self.pin, self.id)
-                GPIO.setup(pin, GPIO.OUT)
-                GPIO.output(pin, GPIO.HIGH)
-
-    def power_up(self, wait_for_connection=True):
-        """
-        Power up a worker by pulsing its PWR_BUT line low for 500ms
-        """
-
-        # This "with" statement blocks until it can acquire the pin lock
-        log.debug("Worker %s attempting to acquire pin lock on %s", self.id, self.pin)
-        with self._pin_lock:
-            log.debug("Worker %s acquired pin lock on %s", self.id, self.pin)
-            retries = 0
-            first_attempt_time = datetime.now()
-            while retries < s.POWER_UP_MAX_RETRIES:
-                if VM_MODE:
-                    log.info("Power on VM for worker %s (try #%d)", self.id, retries)
-                    #Start vms with nc
-                    nc = Netcat(s.NC_IP, s.NC_PORT)
-                    MAC = "DE:AD:BE:EF:00" + self.pin
-                    BOOTARGS = "ip=192.168.1." + str(self.id) + "::192.168.1.1:255.255.255.0:worker" + str(self.id) + ":eth0:off:1.1.1.1:8.8.8.8:209.50.63.74 " + " reboot=t quiet loglevel=0 root=/dev/ram0 rootfstype=ramfs rdinit=/sbin/init console=ttyS0"
-                    KVM_COMMAND = " kvm -M microvm -vga none -no-user-config -nographic -kernel bzImage  -append \"" + BOOTARGS + "\" -netdev tap,id=net0,script=bin/ifup.sh,downscript=bin/ifdown.sh    -device virtio-net-device,netdev=net0,mac=" + MAC  + " &"
-                    log.debug("Sending nc command: " + KVM_COMMAND)
-                    nc.write((KVM_COMMAND + " \n").encode())
-                    #nc.write("ls \n".encode())
-                    nc.close()
-
-                else:
-                    log.info(
-                        "Attempting to power up worker %s (try #%d)", self.id, retries
-                    )
-                    GPIO.output(self.pin, GPIO.LOW)
-                    time.sleep(s.BTN_PRESS_DELAY)
-                    GPIO.output(self.pin, GPIO.HIGH)
-
-                if wait_for_connection:
-                    log.debug(
-                        "Waiting for post-boot connection from worker %s", self.id
-                    )
-                    time.sleep(s.LAST_CONNECTION_TIMEOUT)
-                    if self.last_connection < first_attempt_time:
-                        log.warning(
-                            "No post-boot connection from worker %s since %s, retrying...",
-                            self.id,
-                            self.last_connection,
-                        )
-                        retries += 1
-                        continue
-                    else:
-                        log.debug(
-                            "Successful post-boot connection from worker %s", self.id
-                        )
-                        return
-                else:
-                    # No waiting requested, so just return
-                    return
-
-            # Reaching this point means we ran out of retries
-            log.warning(
-                "No connection from worker %s after %d attempts. Giving up.",
-                self.id,
-                retries,
-            )
-        return
-
-    def power_up_async(self, wait_for_connection=True, block_if_locked=False):
-        """
-        Power up a worker using a separate thread
-        """
-        if not self._pin_lock.locked():
-            self.power_up_thread = threading.Thread(
-                target=self.power_up, args=(wait_for_connection,)
-            )
-            self.power_up_thread.start()
-        elif block_if_locked:
-            log.warning(
-                "Waiting to acquire pin lock for worker %s (this is unusual)", self.id
-            )
-            # There's a thread already running. Join it
-            self.power_up_thread.join()
-            # Now create our own
-            self.power_up_thread = threading.Thread(
-                target=self.power_up, args=(wait_for_connection,)
-            )
-            self.power_up_thread.start()
-        else:
-            # There's a thread already running and user doesn't want to wait for it
-            raise RuntimeError("Unable to obtain pin lock for worker " + str(self.id))
-
 
 class ThreadsafeCSVWriter:
     def __init__(self, metric_path="microfaas-log.csv", result_path="microfaas-results.csv") -> None:
@@ -236,52 +142,6 @@ class ThreadsafeCSVWriter:
 
         return metric_row['invocation_id']
 
-# Mapping of worker IDs to GPIO lines
-# We assume the ID# also maps to the last octet of the worker's IP
-# e.g., if the orchestrator is 192.168.1.2, and workers are 192.168.1.3-12, this should be range(3, 13)
-if VM_MODE:
-    WORKERS = {
-        "103": Worker(103, ":03"),
-        "104": Worker(104, ":04"),
-        "105": Worker(105, ":05"),
-    }
-else:
-    WORKERS = {
-        "3": Worker(3, "P9_12"),
-        "4": Worker(4, "P9_15"),
-        "5": Worker(5, "P9_23"),
-        "6": Worker(6, "P9_25"),
-        "7": Worker(7, "P9_27"),
-        "8": Worker(8, "P8_8"),
-        "9": Worker(9, "P8_10"),
-        "10": Worker(10, "P8_11"),
-        "11": Worker(11, "P8_14"),
-        "12": Worker(12, "P9_26"),
-    }
-
-# JSON payload to send when we want the worker to power down or reboot
-
-SHUTDOWN_PAYLOAD = json.dumps(
-    {
-        "i_id": "PWROFF",
-        "f_id": "fwrite",
-        "f_args": {"path": "/proc/sysrq-trigger", "data": "o"},
-    }
-)
-REBOOT_PAYLOAD = json.dumps(
-    {
-        "i_id": "REBOOT",
-        "f_id": "fwrite",
-        "f_args": {
-            "path": "/proc/sysrq-trigger",
-            "data": "b",
-        },
-    }
-)
-# SHUTDOWN_PAYLOAD = b"{\"i_id\": \"PWROFF\", \"f_id\": \"fwrite\", \"f_args\": {path}}\n"
-
-# Socket timeout
-SOCK_TIMEOUT = 120
 # Supported workload functions and sample inputs.
 # Make sure COMMANDS.keys() matches your workers' FUNCTIONS.keys()!
 # Hardcode seeds for reproducibility
@@ -424,7 +284,7 @@ nprand.seed()
 class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
     def handle(self):
         # Set the timeout for blocking socket operations
-        self.request.settimeout(SOCK_TIMEOUT)
+        self.request.settimeout(s.SOCK_TIMEOUT)
 
         # First check if worker identified itself
         log.debug("Incoming request from %s", self.client_address[0])
@@ -455,20 +315,19 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
             job_json = w.job_queue.get_nowait()
             send_time = time.monotonic() * 1000
             self.request.sendall((job_json + "\n").encode(encoding="ascii"))
-            log.info("Transmitted work to worker %s", self.worker_id)
+            log.info("Transmitted work to %s", w)
             log.debug(job_json)
         except queue.Empty:
             # Worker's queue has been empty since the connection began
-            if VM_MODE:
-                nc = Netcat(s.NC_IP, s.NC_PORT)
-                nc.write(("pkill -of \"" + w.pin + "\"\n").encode())
-                nc.close()
-            else:
-                self.request.sendall((SHUTDOWN_PAYLOAD + "\n").encode(encoding="ascii"))
-            log.warning(
-                "Worker %s requested work while queue empty. Shutdown payload sent.",
-                self.worker_id,
-            )
+            try:
+                try:
+                    self.request.sendall(w.power_down_payload())
+                except NotImplementedError:
+                    # Worker doesn't support shutting itself down, so send the command out-of-band
+                    w.power_down_externally()
+                log.warning("%s requested work while queue empty. Power-off command sent.", w)
+            except WorkerHoldoffException as ex:
+                log.warning("%s requested work while queue empty, but unable to power-off: %s", w, ex)
             return
 
         # Now we wait for work to happen and results to come back
@@ -493,22 +352,21 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
 
         # Check if there's more work for it in its queue
         # If yes, send reboot. Otherwise send shutdown
-        if w.job_queue.empty() and datetime.now() - START_TIME > timedelta(seconds=INITIAL_HOLDOFF):
-            log.info("Worker %s's queue is empty. Sending shutdown payload.", self.worker_id)
-            if VM_MODE:
-                nc = Netcat(s.NC_IP, s.NC_PORT)
-                log.debug("Sending pkill for worker",self.worker_id)
-                shutdownCmd=("pkill -of \"" + w.pin + "\"\n")
-                nc.write(shutdownCmd.encode())
-                nc.close()
-            else:
-                self.request.sendall((SHUTDOWN_PAYLOAD + "\n").encode(encoding="ascii"))
+        if w.job_queue.empty():
+            try:
+                try:
+                    self.request.sendall(w.power_down_payload())
+                except NotImplementedError:
+                    # Worker doesn't support shutting itself down, so send the command out-of-band
+                    w.power_down_externally()
+                log.info("%s's queue is empty. Sent power-down command.", w)
+            except WorkerHoldoffException as ex:
+                log.warning("%s's queue is empty, but unable to power-down: %s", w, ex)
         else:
-            log.debug("Finished handling worker %s. Sending reboot payload.", self.worker_id)
-            self.request.sendall((REBOOT_PAYLOAD + "\n").encode(encoding="ascii"))
+            self.request.sendall(w.reboot_payload())
+            log.debug("Finished handling %s. Sent reboot command.", w)
 
 
-        
 
 class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     def server_bind(self) -> None:
@@ -557,15 +415,17 @@ def load_generator(count):
                 log.info("Enough invocations of %s have been queued up, so popping from COMMANDS", f_id)
                 COMMANDS.pop(f_id, None)
 
-            if q_was_empty and datetime.now() - START_TIME > timedelta(seconds=INITIAL_HOLDOFF):
+            if q_was_empty:
                 # This worker's queue was empty, meaning it probably isn't
                 # powered on right now. Now that it has work, power it up
                 # asynchronously (so that this thread can continue)
-                log.debug("Requesting async power-up of worker %s", w.id)
                 try:
                     w.power_up_async()
-                except RuntimeError as e:
-                    log.error("Potential race condition/deadlock: %s", e)
+                    log.info("%s has work to do, requested async power-up", w)
+                except WorkerHoldoffException as ex:
+                    log.debug("%s has work to do, but unable to power-up: %s", w, ex)
+                except RuntimeError as ex:
+                    log.error("Potential race condition/deadlock: %s", ex)
             count -= 1
         time.sleep(s.LOAD_GEN_PERIOD)
     log.info("Load generator exiting (queuing complete)")
@@ -579,11 +439,13 @@ def health_monitor(timeout=120):
             if (not w.job_queue.empty() 
                   and w.last_connection != datetime.min
                   and datetime.now() - w.last_connection > timeout_delta):
-                log.warning("Haven't heard from worker %s since %s, requesting power-up", w.id, w.last_connection)
                 try:
                     w.power_up_async(block_if_locked=False)
-                except RuntimeError as e:
-                    log.warning("Power-up request denied: %s", e)
+                    log.warning("Haven't heard from %s since %s, requested power-up", w, w.last_connection)
+                except WorkerHoldoffException as ex:
+                    log.warning("Haven't heard from %s since %s, but unable to power-up: %s", w, w.last_connection, ex)
+                except RuntimeError as ex:
+                    log.error("Haven't heard from %s since %s, but unable to power-up: %s", w, w.last_connection, ex)
 
             # Check queues again
             all_queues_not_empty = all_queues_not_empty or not w.job_queue.empty()
@@ -593,7 +455,7 @@ def health_monitor(timeout=120):
 if __name__ == "__main__":
 
     # Set up CSV writer
-    writer = ThreadsafeCSVWriter(datetime.now().strftime("%Y%m%d.%H%M%S")+".microfaas-log.csv")
+    writer = ThreadsafeCSVWriter("microfaas{}.results.{}.csv".format(POSTFIX, datetime.now().strftime("%Y-%m-%d.%I%M%S%p"),))
 
     # Set up load generation thread
     load_gen_thread = threading.Thread(
