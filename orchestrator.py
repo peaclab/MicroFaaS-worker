@@ -12,6 +12,7 @@ import socketserver
 import string
 import threading
 import time
+import settings as s
 
 from binascii import hexlify
 from datetime import datetime, timedelta
@@ -21,9 +22,6 @@ from numpy import random as nprand
 from zlib import compress
 
 
-
-
-
 # Check command line argument for VM flag
 parser = argparse.ArgumentParser()
 parser.add_argument('--vm', action='store_true')
@@ -31,23 +29,8 @@ VM_MODE = parser.parse_args().vm
 if VM_MODE:
     print("VM Mode Activated :D")
 
-# NC Server IP
-NC_IP = '192.168.1.201'
-NC_PORT = 1152
-
-# TCP Server Setup
-# Host "" means bind to all interfaces
-# Port 0 means to select an arbitrary unused port
-HOST, PORT = "", 63302
-
 # Log Level
-log.basicConfig(level=log.INFO)
-
-# How many total functions to run across all workers
-FUNC_EXEC_COUNT = 17000
-
-# How often to populate queues (seconds)
-LOAD_GEN_PERIOD = 1
+log.basicConfig(level=s.LOG_LEVEL)
 
 # How long to wait after script start before issuing startup commands
 if VM_MODE:
@@ -58,9 +41,6 @@ else:
 START_TIME = datetime.now()
 
 class Worker:
-    BTN_PRESS_DELAY = 0.5
-    LAST_CONNECTION_TIMEOUT = timedelta(seconds=10)
-    POWER_UP_MAX_RETRIES = 6
 
     def __init__(self, id, pin) -> None:
         self.id = id
@@ -91,11 +71,11 @@ class Worker:
             log.debug("Worker %s acquired pin lock on %s", self.id, self.pin)
             retries = 0
             first_attempt_time = datetime.now()
-            while retries < self.POWER_UP_MAX_RETRIES:
+            while retries < s.POWER_UP_MAX_RETRIES:
                 if VM_MODE:
                     log.info("Power on VM for worker %s (try #%d)", self.id, retries)
                     #Start vms with nc
-                    nc = Netcat(NC_IP, NC_PORT)
+                    nc = Netcat(s.NC_IP, s.NC_PORT)
                     MAC = "DE:AD:BE:EF:00" + self.pin
                     BOOTARGS = "ip=192.168.1." + str(self.id) + "::192.168.1.1:255.255.255.0:worker" + str(self.id) + ":eth0:off:1.1.1.1:8.8.8.8:209.50.63.74 " + " reboot=t quiet loglevel=0 root=/dev/ram0 rootfstype=ramfs rdinit=/sbin/init console=ttyS0"
                     KVM_COMMAND = " kvm -M microvm -vga none -no-user-config -nographic -kernel bzImage  -append \"" + BOOTARGS + "\" -netdev tap,id=net0,script=bin/ifup.sh,downscript=bin/ifdown.sh    -device virtio-net-device,netdev=net0,mac=" + MAC  + " &"
@@ -109,14 +89,14 @@ class Worker:
                         "Attempting to power up worker %s (try #%d)", self.id, retries
                     )
                     GPIO.output(self.pin, GPIO.LOW)
-                    time.sleep(self.BTN_PRESS_DELAY)
+                    time.sleep(s.BTN_PRESS_DELAY)
                     GPIO.output(self.pin, GPIO.HIGH)
 
                 if wait_for_connection:
                     log.debug(
                         "Waiting for post-boot connection from worker %s", self.id
                     )
-                    time.sleep(self.LAST_CONNECTION_TIMEOUT.seconds)
+                    time.sleep(s.LAST_CONNECTION_TIMEOUT)
                     if self.last_connection < first_attempt_time:
                         log.warning(
                             "No post-boot connection from worker %s since %s, retrying...",
@@ -480,7 +460,7 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         except queue.Empty:
             # Worker's queue has been empty since the connection began
             if VM_MODE:
-                nc = Netcat(NC_IP, NC_PORT)
+                nc = Netcat(s.NC_IP, s.NC_PORT)
                 nc.write(("pkill -of \"" + w.pin + "\"\n").encode())
                 nc.close()
             else:
@@ -516,7 +496,7 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         if w.job_queue.empty() and datetime.now() - START_TIME > timedelta(seconds=INITIAL_HOLDOFF):
             log.info("Worker %s's queue is empty. Sending shutdown payload.", self.worker_id)
             if VM_MODE:
-                nc = Netcat(NC_IP, NC_PORT)
+                nc = Netcat(s.NC_IP, s.NC_PORT)
                 log.debug("Sending pkill for worker",self.worker_id)
                 shutdownCmd=("pkill -of \"" + w.pin + "\"\n")
                 nc.write(shutdownCmd.encode())
@@ -587,7 +567,7 @@ def load_generator(count):
                 except RuntimeError as e:
                     log.error("Potential race condition/deadlock: %s", e)
             count -= 1
-        time.sleep(LOAD_GEN_PERIOD)
+        time.sleep(s.LOAD_GEN_PERIOD)
     log.info("Load generator exiting (queuing complete)")
 
 def health_monitor(timeout=120):
@@ -617,7 +597,7 @@ if __name__ == "__main__":
 
     # Set up load generation thread
     load_gen_thread = threading.Thread(
-        target=load_generator, daemon=False, args=(FUNC_EXEC_COUNT,)
+        target=load_generator, daemon=False, args=(s.FUNC_EXEC_COUNT,)
     )
     load_gen_thread.start()
 
@@ -628,7 +608,7 @@ if __name__ == "__main__":
     health_monitor_thread.start()
 
     # Set up server thread
-    server = ThreadedTCPServer((HOST, PORT), ThreadedTCPRequestHandler)
+    server = ThreadedTCPServer((s.HOST, s.PORT), ThreadedTCPRequestHandler)
     with server:
         ip, port = server.server_address
 
