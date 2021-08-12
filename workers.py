@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 
 import Adafruit_BBIO.GPIO as GPIO # type: ignore
 
-from fifo_lock import FIFOLock
 import settings as s
 from netcat import Netcat
 
@@ -26,7 +25,7 @@ class WorkerHoldoffException(Exception):
 class WorkerState(Enum):
     UNKNOWN = auto()
     POWERING_UP = auto()
-    IDLE = auto()
+    # IDLE = auto()
     WORKING = auto()
     POWERING_DOWN = auto()
     REBOOTING = auto()
@@ -41,9 +40,14 @@ class Worker:
         self.id = id
         # self.pin is the last octet of the MAC address in VM mode
         self.pin = pin
+        self._pin_lock = threading.Lock()
+
         self._state = WorkerState.UNKNOWN
-        self._pin_lock = FIFOLock()
-        self.job_queue = queue.Queue()
+        self._state_lock = threading.RLock()
+
+        self._queue_lock = threading.RLock()
+        self._job_queue = queue.Queue()
+
         self.last_connection = datetime.min
         self.last_completion = datetime.min
         self.instantiated = datetime.now()
@@ -58,43 +62,83 @@ class Worker:
         self._monitor_thread.start()
 
     def in_state(self, state) -> bool:
-        return self._state == state
+        """
+        Thread-safe state comparator
+        """
+        with self._state_lock:
+            return self._state == state
 
     def set_state(self, state):
-        self.last_state_change = datetime.now()
-        self._state = state
+        """
+        Thread-safe and timestamped setter for this worker's state
+        """
+        with self._state_lock:
+            self.last_state_change = datetime.now()
+            self._state = state
+
+    def enqueue_job(self, job):
+        """
+        Add a job to this worker's queue
+
+        @throws queue.Full if the queue is full
+        """
+        with self._queue_lock:
+            self._job_queue.put_nowait(job)
+
+    def dequeue_job(self):
+        """
+        Get the next job from this workers's queue
+
+        @throws queue.Empty if the queue is empty
+        """
+        with self._queue_lock:
+            job = self._job_queue.get_nowait()
+            self.set_state(WorkerState.WORKING)
+            return job
+
+    def job_complete(self):
+        """
+        Indicate that the last job (returned by dequeue_job()) is complete
+
+        @throws ValueError if called more times than # of jobs added to queue
+        """
+        self._job_queue.task_done()
 
     def _monitor(self):
         while True:
-            if self.in_state(WorkerState.POWERING_UP):
-                try:
-                    self.power_up()
-                except WorkerHoldoffException:
+            # We use a non-blocking lock to prevent starvation of other threads
+            if self._state_lock.acquire(blocking = False):
+                if self.in_state(WorkerState.POWERING_UP):
+                    try:
+                        self.power_up()
+                    except WorkerHoldoffException:
+                        pass
+                # elif self.in_state(WorkerState.IDLE):
+                #     # Power down if queue empty and holdoff expired
+                #     if self.job_queue.empty() and not self._holding_off(self._power_down_holdoff):
+                #         self.set_state(WorkerState.POWERING_DOWN)
+                elif self.in_state(WorkerState.WORKING):
+                    # Reboot if working for too long
+                    if datetime.now() - self.last_state_change > self._job_timeout:
+                        self.set_state(WorkerState.REBOOTING)
+                elif self.in_state(WorkerState.POWERING_DOWN):
+                    # Assume worker is OFF after 1 sec of POWERING_DOWN
+                    if datetime.now() - self.last_state_change > timedelta(seconds=1):
+                        self.set_state(WorkerState.OFF)
+                elif self.in_state(WorkerState.REBOOTING):
+                    # Assume worker is MIA if stuck in REBOOTING for 15+ sec
+                    if datetime.now() - self.last_state_change > timedelta(seconds=15):
+                        log.warning("%s stuck in REBOOTING for 15+ sec, moving to UNKNOWN", self)
+                        self.set_state(WorkerState.UNKNOWN)
+                elif self.in_state(WorkerState.OFF):
+                    # Power up if queue not empty and holdoff expired
+                    if not self.job_queue.empty() and not self._holding_off(self._power_up_holdoff):
+                        self.set_state(WorkerState.POWERING_UP)
+                else:
+                    # TODO what to do if unknown?
                     pass
-            elif self.in_state(WorkerState.IDLE):
-                # Power down if queue empty and holdoff expired
-                if self.job_queue.empty() and not self._holding_off(self._power_down_holdoff):
-                    self.set_state(WorkerState.POWERING_DOWN)
-            elif self.in_state(WorkerState.WORKING):
-                # Reboot if working for too long
-                if datetime.now() - self.last_state_change > self._job_timeout:
-                    self.set_state(WorkerState.REBOOTING)
-            elif self.in_state(WorkerState.POWERING_DOWN):
-                # Assume worker is OFF after 1 sec of POWERING_DOWN
-                if datetime.now() - self.last_state_change > timedelta(seconds=1):
-                    self.set_state(WorkerState.OFF)
-            elif self.in_state(WorkerState.REBOOTING):
-                # Assume worker is MIA if stuck in REBOOTING for 15+ sec
-                if datetime.now() - self.last_state_change > timedelta(seconds=15):
-                    log.warning("%s stuck in REBOOTING for 15+ sec, moving to UNKNOWN", self)
-                    self.set_state(WorkerState.UNKNOWN)
-            elif self.in_state(WorkerState.OFF):
-                # Power up if queue not empty and holdoff expired
-                if not self.job_queue.empty() and not self._holding_off(self._power_up_holdoff):
-                    self.set_state(WorkerState.POWERING_UP)
-            else:
-                # TODO what to do if unknown?
-                pass
+                self._state_lock.release()
+
             time.sleep(s.MONITOR_PERIOD)
         
 
