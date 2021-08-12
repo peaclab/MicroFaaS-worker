@@ -21,22 +21,72 @@ class WorkerHoldoffException(Exception):
     """Exception raised when we asked a worker to do something before the holdoff period expired"""
     pass
 
+class WorkerEvent(threading.Event):
+    """Event with some conveinience methods for usage in a state machine"""
+    def wait_then_clear(self, timeout = None):
+        retval = self.wait(timeout)
+        self.clear()
+        return retval
+
+class ActionableWorkerEvent(WorkerEvent):
+    """WorkerEvent that runs an action in a separate thread upon set()"""
+    def __init__(self, action, holdoff = None):
+        self._action = action
+        self._holdoff = holdoff
+        self._monitor_thread = threading.Thread(target=self._monitor, daemon=True)
+        self._monitor_thread.start()
+
+    def _monitor(self):
+        if self._holdoff is not None:
+            time.sleep(self._holdoff)
+
+        while True:
+            self.wait_then_clear()
+            self._action()
+        
+
 @unique
 class WorkerState(Enum):
     UNKNOWN = auto()
     POWERING_UP = auto()
-    # IDLE = auto()
     WORKING = auto()
-    POWERING_DOWN = auto()
     REBOOTING = auto()
     OFF = auto()
+
+class IterMixin(object):
+    def __iter__(self):
+        for attr, value in self.__dict__.items():
+            yield attr, value
+
+class InputEvents(IterMixin):
+    def __init__(self) -> None:
+        self.WORKER_REQUEST = WorkerEvent()
+        self.QUEUE_NOT_EMPTY = WorkerEvent()
+
+class OutputEvents(IterMixin):
+    def __init__(self, power_up_action, power_up_holdoff, power_down_action, power_down_holdoff) -> None:
+        self.DEQUEUE = WorkerEvent()
+        self.REBOOT = WorkerEvent()
+        self.POWER_UP = ActionableWorkerEvent(power_up_action, power_up_holdoff)
+        self.POWER_DOWN = ActionableWorkerEvent(power_down_action, power_down_holdoff)
+    def clear_all(self):
+        for _, ev in self:
+            ev.clear()
 
 class Worker:
     """
     Base class for workers
     """
 
-    def __init__(self, id, pin) -> None:
+    def __init__(self, id, pin, power_up_holdoff, power_down_holdoff) -> None:
+        # State Machine I/O
+        self._I = InputEvents()
+        self._O = OutputEvents(self.power_up, power_up_holdoff, self.power_down)
+
+        self.cycle_counts = {}
+        for event in self._I.keys() + self._O.keys():
+            self.cycle_counts[event] = 0
+
         self.id = id
         # self.pin is the last octet of the MAC address in VM mode
         self.pin = pin
@@ -53,11 +103,87 @@ class Worker:
         self.instantiated = datetime.now()
         self.last_state_change = datetime.now()
         self._job_timeout = timedelta(seconds = 120)
-        self._power_up_holdoff = timedelta(seconds = 0)
-        self._power_down_holdoff = timedelta(seconds = 0)
-        self._monitor_thread = None
 
-    def start_monitor(self):
+        self._state_machine_thread = None
+
+    def _state_machine(self):
+        while True:
+            self.cycle_counts[self._state] += 1
+            if self.in_state(WorkerState.POWERING_UP):
+                self._O.POWER_DOWN.clear() # Just in case we're exiting holdoff
+                if self._I.WORKER_REQUEST.wait_then_clear(timeout = 60):
+                    if self._I.QUEUE_NOT_EMPTY.wait(timeout = 1):
+                        self._O.DEQUEUE.set()
+                        #self._set_timer()
+                        self.set_state(WorkerState.WORKING)
+                    else:
+                        self._O.POWER_DOWN.set()
+                        self.set_state(WorkerState.OFF)
+                else:
+                    # Timeout
+                    self.set_state(WorkerState.UNKNOWN)
+
+            elif self.in_state(WorkerState.WORKING):
+                self._O.POWER_DOWN.clear() # Just in case we're exiting holdoff
+                if self._I.WORKER_REQUEST.wait_then_clear(timeout = 120):
+                    if self._I.QUEUE_NOT_EMPTY.wait(timeout = 1):
+                        self._O.REBOOT.set()
+                        #self._set_timer()
+                        self.set_state(WorkerState.REBOOTING)
+                    else:
+                        self._O.POWER_DOWN.set()
+                        self.set_state(WorkerState.OFF)
+                else:
+                    # Timeout
+                    self.set_state(WorkerState.UNKNOWN)
+            
+            elif self.in_state(WorkerState.REBOOTING):
+                self._O.POWER_UP.clear() # Just in case we're exiting holdoff
+                self._O.POWER_DOWN.clear() # Ditto
+                if self._I.WORKER_REQUEST.wait_then_clear(timeout = 120):
+                    if self._I.QUEUE_NOT_EMPTY.wait(timeout = 1):
+                        self._O.DEQUEUE.set()
+                        self.set_state(WorkerState.WORKING)
+                    else:
+                        self._O.POWER_DOWN.set()
+                        self.set_state(WorkerState.OFF)
+                else:
+                    # Timeout
+                    self.set_state(WorkerState.UNKNOWN)
+            
+            elif self.in_state(WorkerState.OFF):
+                self._O.POWER_UP.clear() # Just in case we're exiting holdoff
+                if self._I.QUEUE_NOT_EMPTY.wait(timeout = 1):
+                    self._O.POWER_UP.set()
+                    self.set_state(WorkerState.POWERING_UP)
+                elif self._I.WORKER_REQUEST.wait_then_clear(timeout = 1):
+                    # We got a worker request during OFF with an empty queue?
+                    self._O.POWER_DOWN.set()
+                    self.set_state(WorkerState.OFF)
+            
+            elif self.in_state(WorkerState.UNKNOWN):
+                if self._I.WORKER_REQUEST.wait_then_clear(timeout = 30):
+                    self._O.REBOOT.set()
+                    self.set_state(WorkerState.REBOOTING)
+                else:
+                    # Timeout
+                    self._O.POWER_UP.set()
+                    self.set_state(WorkerState.POWERING_UP)
+
+            else:
+                # Uh oh
+                log.critical("%s entered undefined state %s. Moving to UNKNOWN", self, self._state)
+                self.set_state(WorkerState.UNKNOWN)
+
+    def _set_timer(self):
+        self._timer = threading.Timer(120, self._timeout_event.set)
+
+    def _clear_outputs(self):
+        for k, event in self._events.items():
+            if isinstance(k, O):
+                event.clear()   
+
+    def begin(self):
         self._monitor_thread = threading.Thread(target=self._monitor, daemon=True)
         self._monitor_thread.start()
 
@@ -103,43 +229,6 @@ class Worker:
         @throws ValueError if called more times than # of jobs added to queue
         """
         self._job_queue.task_done()
-
-    def _monitor(self):
-        while True:
-            # We use a non-blocking lock to prevent starvation of other threads
-            if self._state_lock.acquire(blocking = False):
-                if self.in_state(WorkerState.POWERING_UP):
-                    try:
-                        self.power_up()
-                    except WorkerHoldoffException:
-                        pass
-                # elif self.in_state(WorkerState.IDLE):
-                #     # Power down if queue empty and holdoff expired
-                #     if self.job_queue.empty() and not self._holding_off(self._power_down_holdoff):
-                #         self.set_state(WorkerState.POWERING_DOWN)
-                elif self.in_state(WorkerState.WORKING):
-                    # Reboot if working for too long
-                    if datetime.now() - self.last_state_change > self._job_timeout:
-                        self.set_state(WorkerState.REBOOTING)
-                elif self.in_state(WorkerState.POWERING_DOWN):
-                    # Assume worker is OFF after 1 sec of POWERING_DOWN
-                    if datetime.now() - self.last_state_change > timedelta(seconds=1):
-                        self.set_state(WorkerState.OFF)
-                elif self.in_state(WorkerState.REBOOTING):
-                    # Assume worker is MIA if stuck in REBOOTING for 15+ sec
-                    if datetime.now() - self.last_state_change > timedelta(seconds=15):
-                        log.warning("%s stuck in REBOOTING for 15+ sec, moving to UNKNOWN", self)
-                        self.set_state(WorkerState.UNKNOWN)
-                elif self.in_state(WorkerState.OFF):
-                    # Power up if queue not empty and holdoff expired
-                    if not self.job_queue.empty() and not self._holding_off(self._power_up_holdoff):
-                        self.set_state(WorkerState.POWERING_UP)
-                else:
-                    # TODO what to do if unknown?
-                    pass
-                self._state_lock.release()
-
-            time.sleep(s.MONITOR_PERIOD)
         
 
     def power_up(self, wait_for_connection=True):
@@ -170,6 +259,16 @@ class Worker:
         else:
             # There's a thread already running and user doesn't want to wait for it
             raise RuntimeError("Unable to obtain pin lock for " + str(self))
+
+    def power_down():
+        """
+        Helper method. May or may not return a payload. You're better off using either
+        power_down_externally() or power_down_payload() directly
+        """
+        try:
+            self.power_down_externally()
+        except NotImplementedError:
+            return self.power_down_payload()
 
     def power_down_externally():
         """
