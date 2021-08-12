@@ -1,3 +1,4 @@
+from enum import Enum, auto, unique
 import json
 import logging as log
 import queue
@@ -21,6 +22,15 @@ class WorkerHoldoffException(Exception):
     """Exception raised when we asked a worker to do something before the holdoff period expired"""
     pass
 
+@unique
+class WorkerState(Enum):
+    UNKNOWN = auto()
+    POWERING_UP = auto()
+    IDLE = auto()
+    WORKING = auto()
+    POWERING_DOWN = auto()
+    REBOOTING = auto()
+    OFF = auto()
 
 class Worker:
     """
@@ -31,14 +41,62 @@ class Worker:
         self.id = id
         # self.pin is the last octet of the MAC address in VM mode
         self.pin = pin
+        self._state = WorkerState.UNKNOWN
         self._pin_lock = FIFOLock()
         self.job_queue = queue.Queue()
         self.last_connection = datetime.min
         self.last_completion = datetime.min
         self.instantiated = datetime.now()
+        self.last_state_change = datetime.now()
+        self._job_timeout = timedelta(seconds = 120)
         self._power_up_holdoff = timedelta(seconds = 0)
-        self._power_up_thread = None
-        self._power_up_thread_terminate = False
+        self._power_down_holdoff = timedelta(seconds = 0)
+        self._monitor_thread = None
+
+    def start_monitor(self):
+        self._monitor_thread = threading.Thread(target=self._monitor, daemon=True)
+        self._monitor_thread.start()
+
+    def in_state(self, state) -> bool:
+        return self._state == state
+
+    def set_state(self, state):
+        self.last_state_change = datetime.now()
+        self._state = state
+
+    def _monitor(self):
+        while True:
+            if self.in_state(WorkerState.POWERING_UP):
+                try:
+                    self.power_up()
+                except WorkerHoldoffException:
+                    pass
+            elif self.in_state(WorkerState.IDLE):
+                # Power down if queue empty and holdoff expired
+                if self.job_queue.empty() and not self._holding_off(self._power_down_holdoff):
+                    self.set_state(WorkerState.POWERING_DOWN)
+            elif self.in_state(WorkerState.WORKING):
+                # Reboot if working for too long
+                if datetime.now() - self.last_state_change > self._job_timeout:
+                    self.set_state(WorkerState.REBOOTING)
+            elif self.in_state(WorkerState.POWERING_DOWN):
+                # Assume worker is OFF after 1 sec of POWERING_DOWN
+                if datetime.now() - self.last_state_change > timedelta(seconds=1):
+                    self.set_state(WorkerState.OFF)
+            elif self.in_state(WorkerState.REBOOTING):
+                # Assume worker is MIA if stuck in REBOOTING for 15+ sec
+                if datetime.now() - self.last_state_change > timedelta(seconds=15):
+                    log.warning("%s stuck in REBOOTING for 15+ sec, moving to UNKNOWN", self)
+                    self.set_state(WorkerState.UNKNOWN)
+            elif self.in_state(WorkerState.OFF):
+                # Power up if queue not empty and holdoff expired
+                if not self.job_queue.empty() and not self._holding_off(self._power_up_holdoff):
+                    self.set_state(WorkerState.POWERING_UP)
+            else:
+                # TODO what to do if unknown?
+                pass
+            time.sleep(s.MONITOR_PERIOD)
+        
 
     def power_up(self, wait_for_connection=True):
         """
@@ -113,9 +171,12 @@ class Worker:
             log.debug("Successful post-boot connection from %s", self)
             return
 
+    def _holding_off(self, hold_off_duration):
+        return datetime.now() - self.instantiated > hold_off_duration
+
     def _raise_if_holding_off(self, exc, hold_off_duration):
         """Raise an exception if we're currently in a holdoff period"""
-        if datetime.now() - self.instantiated > hold_off_duration:
+        if self._holding_off(hold_off_duration):
             raise exc
 
     def __repr__(self) -> str:

@@ -21,6 +21,9 @@ LOAD_GEN_PERIOD = 1
 # Minimum severity of displayed log messages (DEBUG, INFO, WARNING, ERROR, or CRITICAL)
 LOG_LEVEL = "INFO"
 
+# How long (in seconds) to wait after each worker status check to begin another
+MONITOR_PERIOD = 0.2
+
 # How many seconds to "hold down the power button" when powering-up BBBWorkers 
 BTN_PRESS_DELAY = 0.5
 
