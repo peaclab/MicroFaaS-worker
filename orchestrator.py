@@ -12,6 +12,9 @@ import socketserver
 import string
 import threading
 import time
+import sys
+
+#import itertools
 
 from binascii import hexlify
 from datetime import datetime, timedelta
@@ -21,19 +24,22 @@ from numpy import random as nprand
 from zlib import compress
 
 
-
-
-
 # Check command line argument for VM flag
-parser = argparse.ArgumentParser()
-parser.add_argument('--vm', action='store_true')
-VM_MODE = parser.parse_args().vm
-if VM_MODE:
+#parser = argparse.ArgumentParser()
+#parser.add_argument('--vm', action='store_true')
+#VM_MODE = parser.parse_args().vm
+cmdArgs = sys.argv
+VM_MODE = False
+if cmdArgs[1] == "--vm" :
+    VM_MODE = True
     print("VM Mode Activated :D")
+    NUM_WORKERS = cmdArgs[2]
+else:
+    NUM_WORKERS = cmdArgs[1]
 
 # NC Server IP
-NC_IP = '127.0.0.1'
-NC_PORT = 8888
+NC_IP = '192.168.1.201'
+NC_PORT = 1152
 
 # TCP Server Setup
 # Host "" means bind to all interfaces
@@ -44,14 +50,19 @@ HOST, PORT = "", 63302
 log.basicConfig(level=log.INFO)
 
 # How many total functions to run across all workers
-FUNC_EXEC_COUNT = 200
+FUNC_EXEC_COUNT = 17000
 
 # How often to populate queues (seconds)
-LOAD_GEN_PERIOD = 1
+LOAD_GEN_PERIOD = 0.5
+
+# How long to wait after script start before issuing startup commands
+INITIAL_HOLDOFF = 0
+
+START_TIME = datetime.now()
 
 class Worker:
     BTN_PRESS_DELAY = 0.5
-    LAST_CONNECTION_TIMEOUT = timedelta(seconds=8)
+    LAST_CONNECTION_TIMEOUT = timedelta(seconds=6)
     POWER_UP_MAX_RETRIES = 6
 
     def __init__(self, id, pin) -> None:
@@ -89,10 +100,11 @@ class Worker:
                     #Start vms with nc
                     nc = Netcat(NC_IP, NC_PORT)
                     MAC = "DE:AD:BE:EF:00" + self.pin
-                    BOOTARGS = "ip=192.168.1.10" + self.pin + "::192.168.1.1:255.255.255.0:worker" + self.pin + ":eth0:off:1.1.1.1:8.8.8.8:209.50.63.74 " + "root=/dev/ram0 rootfstype=ramfs rdinit=/sbin/init console=ttyS0"
-                    KVM_COMMAND = "kvm -M microvm -vga none -nodefaults -no-user-config -nographic -kernel ~/bzImage  -append \"" + BOOTARGS + "\" -netdev tap,id=net0,script=test/ifup.sh,downscript=test/ifdown.sh    -device virtio-net-device,netdev=net0,mac=" + MAC
+                    BOOTARGS = "ip=192.168.1." + str(self.id) + "::192.168.1.1:255.255.255.0:worker" + str(self.id) + ":eth0:off:1.1.1.1:8.8.8.8:209.50.63.74 " + " reboot=t quiet loglevel=0 root=/dev/ram0 rootfstype=ramfs rdinit=/sbin/init console=ttyS0"
+                    KVM_COMMAND = " kvm -M microvm -vga none -no-user-config -nographic -kernel bzImage  -append \"" + BOOTARGS + "\" -netdev tap,id=net0,script=bin/ifup.sh,downscript=bin/ifdown.sh    -device virtio-net-device,netdev=net0,mac=" + MAC  + " &"
                     log.debug("Sending nc command: " + KVM_COMMAND)
-                    nc.write(KVM_COMMAND.encode())
+                    nc.write((KVM_COMMAND + " \n").encode())
+                    #nc.write("ls \n".encode())
                     nc.close()
 
                 else:
@@ -250,25 +262,60 @@ class ThreadsafeCSVWriter:
 # Mapping of worker IDs to GPIO lines
 # We assume the ID# also maps to the last octet of the worker's IP
 # e.g., if the orchestrator is 192.168.1.2, and workers are 192.168.1.3-12, this should be range(3, 13)
+BB_WORKERS = {
+        "3": Worker(3, "P9_12"),
+        "4": Worker(4, "P9_15"),
+        "5": Worker(5, "P9_23"),
+        "6": Worker(6, "P9_25"),
+        "7": Worker(7, "P9_27"),
+        "8": Worker(8, "P8_8"),
+        "9": Worker(9, "P8_10"),
+        "10": Worker(10, "P8_11"),
+        "11": Worker(11, "P8_14"),
+        "12": Worker(12, "P9_26"),
+    }
+
+WORKERS={}
 if VM_MODE:
-    WORKERS = {
-        "3": Worker(3, ":03"),
-        "4": Worker(4, ":04"),
-        "5": Worker(5, ":05"),
-    }
+    for i in range(int(NUM_WORKERS)):
+        WORKERS[str(103 + i)] = Worker(103 + i,":0"+ str(i))
+#    WORKERS = {
+#        "103": Worker(103, ":03"),
+#        "104": Worker(104, ":04"),
+#        "105": Worker(105, ":05"),
+#        "106": Worker(106, ":06"),
+#        "107": Worker(107, ":07"),
+#	"108": Worker(108, ":08"),
+#	"109": Worker(109, ":09"),
+#	"110": Worker(110, ":10"),
+#	"111": Worker(111, ":11"),
+#	"112": Worker(112, ":12"),
+#        "113": Worker(113, ":13"),
+#        "114": Worker(114, ":14"),
+#        "115": Worker(115, ":15"),
+#        "116": Worker(116, ":16"),
+#        "117": Worker(117, ":17"),
+#        "118": Worker(118, ":18"),
+#        "119": Worker(119, ":19"),
+#        "120": Worker(120, ":20"),
+#	"121": Worker(121, ":21"),
+#        "122": Worker(122, ":22")
+#    }
 else:
-    WORKERS = {
-        "3": Worker(3, "P9_15"),
-        "4": Worker(4, "P9_23"),
-        "5": Worker(5, "P9_25"),
-        # "6": Worker(6, "P9_27"),
-        # "7": Worker(7, "P8_8"),
-        # "8": Worker(8, "P8_10"),
-        # "9": Worker(9, "P8_12"),
-        # "10": Worker(10, "P8_14"),
-        # "11": Worker(11, "P8_26"),
-        # "12": Worker(12, "P9_12"),
-    }
+    WORKERS = dict(list(BB_WORKERS.items())[0:int(NUM_WORKERS)])
+    print(WORKERS)
+#    WORKERS = {
+#        "3": Worker(3, "P9_12"),
+#        "4": Worker(4, "P9_15"),
+#        "5": Worker(5, "P9_23"),
+#        "6": Worker(6, "P9_25"),
+#        "7": Worker(7, "P9_27"),
+#        "8": Worker(8, "P8_8"),
+#        "9": Worker(9, "P8_10"),
+#        "10": Worker(10, "P8_11"),
+#        "11": Worker(11, "P8_14"),
+#        "12": Worker(12, "P9_26"),
+#    }
 
 # JSON payload to send when we want the worker to power down or reboot
 
@@ -292,7 +339,7 @@ REBOOT_PAYLOAD = json.dumps(
 # SHUTDOWN_PAYLOAD = b"{\"i_id\": \"PWROFF\", \"f_id\": \"fwrite\", \"f_args\": {path}}\n"
 
 # Socket timeout
-SOCK_TIMEOUT = 90
+SOCK_TIMEOUT = 120
 # Supported workload functions and sample inputs.
 # Make sure COMMANDS.keys() matches your workers' FUNCTIONS.keys()!
 # Hardcode seeds for reproducibility
@@ -304,14 +351,14 @@ COMMANDS = {
     "cascading_sha256": [
         {  # data is 64 random chars, rounds is rand int upto 1 mil
             "data": "".join(random.choices(string.ascii_letters + string.digits, k=64)),
-            "rounds": random.randint(1, 1000000),
+            "rounds": random.randint(1, 10000),
         }
         for _ in range(10)
     ],
     "cascading_md5": [
         {  # data is 64 random chars, rounds is rand int upto 1 mil
             "data": "".join(random.choices(string.ascii_letters + string.digits, k=64)),
-            "rounds": random.randint(1, 1000000),
+            "rounds": random.randint(1, 10000),
         }
         for _ in range(10)
     ],
@@ -319,12 +366,6 @@ COMMANDS = {
         {
             "A": nprand.random((matrix_sizes[n], matrix_sizes[n])).tolist(),
             "B": nprand.random((matrix_sizes[n], matrix_sizes[n])).tolist()
-        } for n in range(10)
-    ],
-    "linpack": [
-        {
-            "A": nprand.random((matrix_sizes[n], matrix_sizes[n])).tolist(),
-            "B": nprand.random((matrix_sizes[n], )).tolist()
         } for n in range(10)
     ],
     "html_generation": [{"n": random.randint(1, 128)} for _ in range(10)],
@@ -419,7 +460,7 @@ COMMANDS = {
     "upload_kafka": [
         {
             "groupID": 2,
-            "consumerID" : "br1-780e17d8-549d-4531-ac95-c29afa751d5e",
+            "consumerID" : "br1-f2b841dd-1c1a-42b6-9671-0538cd17f138",
             "topic" : "SampleTopic",
             "message" : "Hello World ".join(random.choices(string.digits, k=10))
         }
@@ -428,7 +469,7 @@ COMMANDS = {
     "read_kafka": [
         {
             "groupID": 2,
-            "consumerID" : "br1-780e17d8-549d-4531-ac95-c29afa751d5e"
+            "consumerID" : "br1-f2b841dd-1c1a-42b6-9671-0538cd17f138"
         }
     ]
 }
@@ -510,11 +551,13 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
 
         # Check if there's more work for it in its queue
         # If yes, send reboot. Otherwise send shutdown
-        if w.job_queue.empty():
+        if w.job_queue.empty() and datetime.now() - START_TIME > timedelta(seconds=INITIAL_HOLDOFF):
             log.info("Worker %s's queue is empty. Sending shutdown payload.", self.worker_id)
             if VM_MODE:
                 nc = Netcat(NC_IP, NC_PORT)
-                nc.write(("pkill -of \"" + w.pin + "\"\n").encode())
+                log.debug("Sending pkill for worker",self.worker_id)
+                shutdownCmd=("pkill -of \"" + w.pin + "\"\n")
+                nc.write(shutdownCmd.encode())
                 nc.close()
             else:
                 self.request.sendall((SHUTDOWN_PAYLOAD + "\n").encode(encoding="ascii"))
@@ -523,7 +566,7 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
             self.request.sendall((REBOOT_PAYLOAD + "\n").encode(encoding="ascii"))
 
 
-        
+
 
 class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     def server_bind(self) -> None:
@@ -545,7 +588,13 @@ def load_generator(count):
     while count > 0:
         for _, w in random.sample(WORKERS.items(), random.randint(1,len(WORKERS))):
             q_was_empty = w.job_queue.empty()
-            f_id = random.choice(list(COMMANDS.keys()))
+            
+            try:
+                f_id = random.choice(list(COMMANDS.keys()))
+            except IndexError as e:
+                log.debug("COMMANDS is empty, continuing...")
+                continue
+
             cmd = {
                 # Invocation ID
                 "i_id": "".join(
@@ -566,7 +615,7 @@ def load_generator(count):
                 log.info("Enough invocations of %s have been queued up, so popping from COMMANDS", f_id)
                 COMMANDS.pop(f_id, None)
 
-            if q_was_empty:
+            if q_was_empty and datetime.now() - START_TIME > timedelta(seconds=INITIAL_HOLDOFF):
                 # This worker's queue was empty, meaning it probably isn't
                 # powered on right now. Now that it has work, power it up
                 # asynchronously (so that this thread can continue)
@@ -579,7 +628,7 @@ def load_generator(count):
         time.sleep(LOAD_GEN_PERIOD)
     log.info("Load generator exiting (queuing complete)")
 
-def health_monitor(timeout=120):
+def health_monitor(timeout=60):
     timeout_delta = timedelta(seconds=timeout)
     all_queues_not_empty = True
     while all_queues_not_empty:
