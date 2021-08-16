@@ -14,8 +14,6 @@ import threading
 import time
 import sys
 
-#import itertools
-
 from binascii import hexlify
 from datetime import datetime, timedelta
 from json.decoder import JSONDecodeError
