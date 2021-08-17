@@ -1,5 +1,3 @@
-from workers import BBBWorker, VMWorker
-
 # NC Server IP
 NC_IP = '192.168.1.201'
 NC_PORT = 1152
@@ -30,6 +28,9 @@ BTN_PRESS_DELAY = 0.5
 # How long (in seconds) to wait for a worker to make a post-boot connection before retrying
 LAST_CONNECTION_TIMEOUT = 10
 
+# Job timeout
+JOB_TIMEOUT = 120
+
 # How many times to retry a power-up request (see LAST_CONNECTION_TIMEOUT)
 POWER_UP_MAX_RETRIES = 6
 
@@ -44,18 +45,19 @@ POWER_DOWN_HOLDOFF_VM = 10
 # WORKERS maps worker IDs to GPIO lines or MAC-addrs 
 # We assume the ID# also maps to the last octet of the worker's IP
 # e.g., if the orchestrator is 192.168.1.2, and workers are 192.168.1.3-12, IDs should be range(3, 13)
+# Format of AVAILABLE WORKERS: { "worker_id": ("WorkerClassName", "pin")}
 AVAILABLE_WORKERS = {
-    "3": BBBWorker(3, "P9_12"),
-    "4": BBBWorker(4, "P9_15"),
-    "5": BBBWorker(5, "P9_23"),
-    "6": BBBWorker(6, "P9_25"),
-    "7": BBBWorker(7, "P9_27"),
-    "8": BBBWorker(8, "P8_8"),
-    "9": BBBWorker(9, "P8_10"),
-    "10": BBBWorker(10, "P8_11"),
-    "11": BBBWorker(11, "P8_14"),
-    "12": BBBWorker(12, "P9_26"),
-    "103": VMWorker(103, ":03"),
-    "104": VMWorker(104, ":04"),
-    "105": VMWorker(105, ":05"),
+    "3": ("BBBWorker", "P9_12"),
+    "4": ("BBBWorker", "P9_15"),
+    "5": ("BBBWorker", "P9_23"),
+    "6": ("BBBWorker", "P9_25"),
+    "7": ("BBBWorker", "P9_27"),
+    "8": ("BBBWorker", "P8_8"),
+    "9": ("BBBWorker", "P8_10"),
+    "10": ("BBBWorker", "P8_11"),
+    "11": ("BBBWorker", "P8_14"),
+    "12": ("BBBWorker", "P9_26"),
+    "103": ("VMWorker", ":03"),
+    "104": ("VMWorker", ":04"),
+    "105": ("VMWorker", ":05"),
 }

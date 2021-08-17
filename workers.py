@@ -1,284 +1,289 @@
-from enum import Enum, auto, unique
 import json
 import logging as log
 import queue
 import threading
-import time
+from time import sleep
+from typing import Any, Callable, NoReturn, Optional
 from datetime import datetime, timedelta
+from enum import Enum, auto
 
-import Adafruit_BBIO.GPIO as GPIO # type: ignore
+try:
+    import Adafruit_BBIO.GPIO as GPIO  # type: ignore
+except ModuleNotFoundError:
+    log.warning("Adafruit GPIO module not found, stubbing with FakeGPIO")
+    from util import FakeGPIO as GPIO
 
 import settings as s
 from netcat import Netcat
+from util import ActionableIOEvent, IOEvent, IOEventGroup
 
 
-class WorkerTimeoutException(Exception):
-    """Exception raised when we timed out waiting for a worker to do something"""
-    pass
-
-
-class WorkerHoldoffException(Exception):
-    """Exception raised when we asked a worker to do something before the holdoff period expired"""
-    pass
-
-class WorkerEvent(threading.Event):
-    """Event with some conveinience methods for usage in a state machine"""
-    def wait_then_clear(self, timeout = None):
-        retval = self.wait(timeout)
-        self.clear()
-        return retval
-
-class ActionableWorkerEvent(WorkerEvent):
-    """WorkerEvent that runs an action in a separate thread upon set()"""
-    def __init__(self, action, holdoff = None):
-        self._action = action
-        self._holdoff = holdoff
-        self._monitor_thread = threading.Thread(target=self._monitor, daemon=True)
-        self._monitor_thread.start()
-
-    def _monitor(self):
-        if self._holdoff is not None:
-            time.sleep(self._holdoff)
-
-        while True:
-            self.wait_then_clear()
-            self._action()
-        
-
-@unique
 class WorkerState(Enum):
+    """Enum for states of a Worker's internal state machine"""
+
     UNKNOWN = auto()
     POWERING_UP = auto()
     WORKING = auto()
     REBOOTING = auto()
     OFF = auto()
 
-class IterMixin(object):
-    def __iter__(self):
-        for attr, value in self.__dict__.items():
-            yield attr, value
 
-class InputEvents(IterMixin):
-    def __init__(self) -> None:
-        self.WORKER_REQUEST = WorkerEvent()
-        self.QUEUE_NOT_EMPTY = WorkerEvent()
+class InputEvents(IOEventGroup):
+    """Inputs to a Worker's internal state machine"""
 
-class OutputEvents(IterMixin):
-    def __init__(self, power_up_action, power_up_holdoff, power_down_action, power_down_holdoff) -> None:
-        self.DEQUEUE = WorkerEvent()
-        self.REBOOT = WorkerEvent()
-        self.POWER_UP = ActionableWorkerEvent(power_up_action, power_up_holdoff)
-        self.POWER_DOWN = ActionableWorkerEvent(power_down_action, power_down_holdoff)
-    def clear_all(self):
-        for _, ev in self:
-            ev.clear()
+    def __init__(self, id: str):
+        super().__init__(id)
+        self.WORKER_REQUEST = IOEvent(id + ":WORKER_REQUEST")
+        self.QUEUE_NOT_EMPTY = IOEvent(id + ":QUEUE_NOT_EMPTY")
+
+
+class OutputEvents(IOEventGroup):
+    """Outputs from a Worker's internal state machine"""
+
+    def __init__(
+        self,
+        id: str,
+        power_up_action: Callable[[], Any],
+        power_up_holdoff: int,
+        power_down_action: Callable[[], None],
+        power_down_holdoff: int,
+    ):
+        # DEQUEUE and REBOOT only control fetched payloads, so they don't need to be Actionable
+        self.DEQUEUE = IOEvent(id + ":DEQUEUE")
+        self.REBOOT = IOEvent(id + ":REBOOT")
+        self.POWER_UP = ActionableIOEvent(id + ":POWER_UP", power_up_action, power_up_holdoff)
+        self.POWER_DOWN = ActionableIOEvent(id + ":POWER_DOWN", power_down_action, power_down_holdoff)
+
 
 class Worker:
     """
     Base class for workers
     """
 
-    def __init__(self, id, pin, power_up_holdoff, power_down_holdoff) -> None:
-        # State Machine I/O
-        self._I = InputEvents()
-        self._O = OutputEvents(self.power_up, power_up_holdoff, self.power_down)
-
-        self.cycle_counts = {}
-        for event in self._I.keys() + self._O.keys():
-            self.cycle_counts[event] = 0
-
+    def __init__(self, id: int, pin: str, power_up_holdoff: int, power_down_holdoff: int):
+        # Basics
+        # ID of the worker is assumed to be last octet its IPv4 address
         self.id = id
-        # self.pin is the last octet of the MAC address in VM mode
+        self._active = False
+        self._job_queue = queue.Queue()
+
+        # Internal state machine
+        self._state = WorkerState.UNKNOWN
+        self._state_machine_thread = None
+        
+        # State machine I/O
+        self._I = InputEvents(str(self) + "-I")
+        self._O = OutputEvents(
+            str(self) + "-O", self._power_up, power_up_holdoff, self._power_down, power_down_holdoff
+        )
+
+        # Track how long the state machine is in each state
+        self.cycle_counts = {}
+        for st in WorkerState:
+            self.cycle_counts[st.name] = 0
+
+        # "pin" identifier that power state control functions will access
         self.pin = pin
         self._pin_lock = threading.Lock()
 
-        self._state = WorkerState.UNKNOWN
-        self._state_lock = threading.RLock()
+    def activate(self) -> None:
+        """
+        Start this Worker's state machine monitoring thread. 
+        """
+        self._state_machine_thread = threading.Thread(target=self._state_machine, daemon=True)
+        self._active = True
+        self._state_machine_thread.start()
 
-        self._queue_lock = threading.RLock()
-        self._job_queue = queue.Queue()
+    def deactivate(self, join: bool = False) -> None:
+        """
+        Stop this Worker's state machine monitoring thread, optionally blocking until the thread
+        terminates.
 
-        self.last_connection = datetime.min
-        self.last_completion = datetime.min
-        self.instantiated = datetime.now()
-        self.last_state_change = datetime.now()
-        self._job_timeout = timedelta(seconds = 120)
+        @raises RuntimeError if state machine thread doesn't stop within 120 seconds
+        """
+        self._active = False
+        if join:
+            try:
+                self._state_machine_thread.join(timeout=120)
+            except AttributeError:
+                pass
+            if self._state_machine_thread.is_alive():
+                raise RuntimeError("Failed to stop state machine before timeout")
 
-        self._state_machine_thread = None
 
-    def _state_machine(self):
-        while True:
-            self.cycle_counts[self._state] += 1
+    def is_active(self) -> bool:
+        """
+        Returns True if this worker's state machine monitor is alive
+        """
+        return self._active and self._state_machine_thread.is_alive()
+ 
+    def _state_machine(self) -> NoReturn:
+        while self._active:
+            self.cycle_counts[self._state.name] += 1
+
             if self.in_state(WorkerState.POWERING_UP):
-                self._O.POWER_DOWN.clear() # Just in case we're exiting holdoff
-                if self._I.WORKER_REQUEST.wait_then_clear(timeout = 60):
-                    if self._I.QUEUE_NOT_EMPTY.wait(timeout = 1):
+                self._O.POWER_DOWN.clear()  # Just in case we're exiting holdoff
+                if self._I.WORKER_REQUEST.wait_then_clear(timeout=60):
+                    if self._I.QUEUE_NOT_EMPTY.wait(timeout=1):
                         self._O.DEQUEUE.set()
-                        #self._set_timer()
-                        self.set_state(WorkerState.WORKING)
+                        self._set_state(WorkerState.WORKING)
                     else:
                         self._O.POWER_DOWN.set()
-                        self.set_state(WorkerState.OFF)
+                        self._set_state(WorkerState.OFF)
                 else:
                     # Timeout
-                    self.set_state(WorkerState.UNKNOWN)
+                    self._O.POWER_UP.set()
+                    self._set_state(WorkerState.POWERING_UP)
 
             elif self.in_state(WorkerState.WORKING):
-                self._O.POWER_DOWN.clear() # Just in case we're exiting holdoff
-                if self._I.WORKER_REQUEST.wait_then_clear(timeout = 120):
-                    if self._I.QUEUE_NOT_EMPTY.wait(timeout = 1):
+                self._O.POWER_DOWN.clear()  # Just in case we're exiting holdoff
+                if self._I.WORKER_REQUEST.wait_then_clear(timeout=120):
+                    if self._I.QUEUE_NOT_EMPTY.wait(timeout=1):
                         self._O.REBOOT.set()
-                        #self._set_timer()
-                        self.set_state(WorkerState.REBOOTING)
+                        self._set_state(WorkerState.REBOOTING)
                     else:
                         self._O.POWER_DOWN.set()
-                        self.set_state(WorkerState.OFF)
+                        self._set_state(WorkerState.OFF)
                 else:
                     # Timeout
-                    self.set_state(WorkerState.UNKNOWN)
-            
+                    self._set_state(WorkerState.UNKNOWN)
+
             elif self.in_state(WorkerState.REBOOTING):
-                self._O.POWER_UP.clear() # Just in case we're exiting holdoff
-                self._O.POWER_DOWN.clear() # Ditto
-                if self._I.WORKER_REQUEST.wait_then_clear(timeout = 120):
-                    if self._I.QUEUE_NOT_EMPTY.wait(timeout = 1):
+                self._O.POWER_UP.clear()  # Just in case we're exiting holdoff
+                self._O.POWER_DOWN.clear()  # Ditto
+                if self._I.WORKER_REQUEST.wait_then_clear(timeout=120):
+                    if self._I.QUEUE_NOT_EMPTY.wait(timeout=1):
                         self._O.DEQUEUE.set()
-                        self.set_state(WorkerState.WORKING)
+                        self._set_state(WorkerState.WORKING)
                     else:
                         self._O.POWER_DOWN.set()
-                        self.set_state(WorkerState.OFF)
+                        self._set_state(WorkerState.OFF)
                 else:
                     # Timeout
-                    self.set_state(WorkerState.UNKNOWN)
-            
+                    self._set_state(WorkerState.UNKNOWN)
+
             elif self.in_state(WorkerState.OFF):
-                self._O.POWER_UP.clear() # Just in case we're exiting holdoff
-                if self._I.QUEUE_NOT_EMPTY.wait(timeout = 1):
+                self._O.POWER_UP.clear()  # Just in case we're exiting holdoff
+                if self._I.QUEUE_NOT_EMPTY.wait(timeout=1):
                     self._O.POWER_UP.set()
-                    self.set_state(WorkerState.POWERING_UP)
-                elif self._I.WORKER_REQUEST.wait_then_clear(timeout = 1):
+                    self._set_state(WorkerState.POWERING_UP)
+                elif self._I.WORKER_REQUEST.wait_then_clear(timeout=1):
                     # We got a worker request during OFF with an empty queue?
                     self._O.POWER_DOWN.set()
-                    self.set_state(WorkerState.OFF)
-            
+                    self._set_state(WorkerState.OFF)
+
             elif self.in_state(WorkerState.UNKNOWN):
-                if self._I.WORKER_REQUEST.wait_then_clear(timeout = 30):
+                if self._I.WORKER_REQUEST.wait_then_clear(timeout=30):
                     self._O.REBOOT.set()
-                    self.set_state(WorkerState.REBOOTING)
+                    self._set_state(WorkerState.REBOOTING)
                 else:
                     # Timeout
                     self._O.POWER_UP.set()
-                    self.set_state(WorkerState.POWERING_UP)
+                    self._set_state(WorkerState.POWERING_UP)
 
             else:
                 # Uh oh
                 log.critical("%s entered undefined state %s. Moving to UNKNOWN", self, self._state)
-                self.set_state(WorkerState.UNKNOWN)
+                self._set_state(WorkerState.UNKNOWN)
 
-    def _set_timer(self):
-        self._timer = threading.Timer(120, self._timeout_event.set)
+    def handle_worker_request(self) -> Optional[bytes]:
+        """
+        Called from outside the class to indicate that this worker is requesting its next job.
+        Triggers the WORKER_REQUEST state machine input. May return a payload if appropriate
 
-    def _clear_outputs(self):
-        for k, event in self._events.items():
-            if isinstance(k, O):
-                event.clear()   
+        @returns payload if appropriate, otherwise None
+        """
+        self._I.WORKER_REQUEST.set()
+        # Block until flag acknowledged and cleared by monitor thread
+        while self._I.WORKER_REQUEST.is_set():
+            sleep(0.1)
 
-    def begin(self):
-        self._monitor_thread = threading.Thread(target=self._monitor, daemon=True)
-        self._monitor_thread.start()
+        # Now check relevant outputs
+        return_payload = None
+        if self._O.DEQUEUE.is_set():
+            self._O.DEQUEUE.clear()
+            try:
+                return_payload = self._dequeue_job()
+            except queue.Empty:
+                log.warning("%s requested job while queue empty", self)
+        elif self._O.REBOOT.is_set():
+            self._O.REBOOT.clear()
+            return_payload = self.reboot_payload()
+        elif self._O.POWER_DOWN.is_set():
+            self._O.POWER_DOWN.clear()
+            try:
+                return self.power_down_payload()
+            except NotImplementedError:
+                # Worker only powers down externally, so payload useless here
+                log.debug("%s should be powering off externally", self)
+        elif self._O.POWER_UP.is_set():
+            # Getting a worker request means we don't need POWER_UP to be set
+            self._O.POWER_UP.clear()
+            # We don't need to do anything else, assuming the monitor takes over here
+        else:
+            log.warning("%s made request but no output events set", self)
+
+        return return_payload
 
     def in_state(self, state) -> bool:
         """
-        Thread-safe state comparator
+        Comparator for this worker's state
         """
-        with self._state_lock:
-            return self._state == state
+        return self._state == state
 
-    def set_state(self, state):
+    def _set_state(self, state) -> None:
         """
-        Thread-safe and timestamped setter for this worker's state
+        Setter for this worker's state
         """
-        with self._state_lock:
-            self.last_state_change = datetime.now()
-            self._state = state
+        self._state = state
 
-    def enqueue_job(self, job):
+    def enqueue_job(self, job: str) -> None:
         """
         Add a job to this worker's queue
 
         @throws queue.Full if the queue is full
         """
-        with self._queue_lock:
-            self._job_queue.put_nowait(job)
+        self._job_queue.put_nowait(job)
+        self._I.QUEUE_NOT_EMPTY.set()
 
-    def dequeue_job(self):
+    def _dequeue_job(self) -> bytes:
         """
         Get the next job from this workers's queue
 
-        @throws queue.Empty if the queue is empty
+        @returns next job as ASCII-encoded JSON byte string
+        @throws queue.Empty if queue empty
         """
-        with self._queue_lock:
-            job = self._job_queue.get_nowait()
-            self.set_state(WorkerState.WORKING)
-            return job
+        try:
+            return self._job_queue.get_nowait().encode(encoding="ascii")
+        except queue.Empty as ex:
+            self._I.QUEUE_NOT_EMPTY.clear()
+            raise ex
 
-    def job_complete(self):
-        """
-        Indicate that the last job (returned by dequeue_job()) is complete
-
-        @throws ValueError if called more times than # of jobs added to queue
-        """
-        self._job_queue.task_done()
-        
-
-    def power_up(self, wait_for_connection=True):
+    def _power_up(self) -> None:
         """
         Power up a worker
         """
         raise NotImplementedError("power_up must be implemented in subclass")
 
-    def power_up_async(self, wait_for_connection=True, block_if_locked=False):
-        """
-        Power up a worker using a separate thread
-        """
-
-        if not self._pin_lock.locked():
-            self.power_up_thread = threading.Thread(
-                target=self.power_up, args=(wait_for_connection,)
-            )
-            self.power_up_thread.start()
-        elif block_if_locked:
-            log.warning("Waiting to acquire pin lock for %s (this is unusual)", self)
-            # There's a thread already running. Join it
-            self.power_up_thread.join()
-            # Now create our own
-            self.power_up_thread = threading.Thread(
-                target=self.power_up, args=(wait_for_connection,)
-            )
-            self.power_up_thread.start()
-        else:
-            # There's a thread already running and user doesn't want to wait for it
-            raise RuntimeError("Unable to obtain pin lock for " + str(self))
-
-    def power_down():
+    def _power_down(self) -> Optional[bytes]:
         """
         Helper method. May or may not return a payload. You're better off using either
         power_down_externally() or power_down_payload() directly
         """
         try:
-            self.power_down_externally()
+            self._power_down_externally()
         except NotImplementedError:
             return self.power_down_payload()
 
-    def power_down_externally():
+    def _power_down_externally(self) -> None:
         """
         Power down worker IF it supports being powered off externally. Otherwise, raises a
-        NotImplementedError which should be caught and followed up with a call to 
+        NotImplementedError which should be caught and followed up with a call to
         power_down_payload()
         """
         raise NotImplementedError()
 
-    def power_down_payload() -> bytes:
+    def power_down_payload(self) -> bytes:
         """
         Returns an ASCII-encoded byte string containing the command to be sent over-the-wire to a
         worker instructing it to power itself down IF it supports this. Otherwise, raises a
@@ -287,197 +292,113 @@ class Worker:
         """
         raise NotImplementedError()
 
-    def reboot_payload() -> bytes:
+    def reboot_payload(self) -> bytes:
         """
         Returns an ASCII-encoded byte string containing the command to be sent over-the-wire to a
         worker instructing it to reboot itself
         """
-        return (json.dumps({
-            "i_id": "REBOOT",
-            "f_id": "fwrite",
-            "f_args": {"path": "/proc/sysrq-trigger", "data": "b"},
-        }) + "\n").encode(encoding="ascii")
-
-    def _wait_for_connection(self, first_attempt_time):
-        """
-        Block until worker connects, or timeout and raise a WorkerTimeoutException
-        """
-        log.debug("Waiting for post-boot connection from %s", self)
-        time.sleep(s.LAST_CONNECTION_TIMEOUT)
-        if self.last_connection < first_attempt_time:
-            log.warning(
-                "No post-boot connection from %s since %s, retrying...", self, self.last_connection
+        return (
+            json.dumps(
+                {
+                    "i_id": "REBOOT",
+                    "f_id": "fwrite",
+                    "f_args": {"path": "/proc/sysrq-trigger", "data": "b"},
+                }
             )
-            raise WorkerTimeoutException()
-
-        else:
-            log.debug("Successful post-boot connection from %s", self)
-            return
-
-    def _holding_off(self, hold_off_duration):
-        return datetime.now() - self.instantiated > hold_off_duration
-
-    def _raise_if_holding_off(self, exc, hold_off_duration):
-        """Raise an exception if we're currently in a holdoff period"""
-        if self._holding_off(hold_off_duration):
-            raise exc
+            + "\n"
+        ).encode(encoding="ascii")
 
     def __repr__(self) -> str:
-        return "Worker" + str(self.id)
+        return self.__class__.__name__ + str(self.id)
 
 
 class BBBWorker(Worker):
-    def __init__(self, id, pin) -> None:
-        super.__init__(id, pin)
+    def __init__(self, id: int, pin: str):
+        super().__init__(id, pin, s.POWER_UP_HOLDOFF_BBB, s.POWER_DOWN_HOLDOFF_BBB)
 
-        self._power_up_holdoff = timedelta(seconds = s.POWER_UP_HOLDOFF_BBB)
-        self._power_down_holdoff = timedelta(seconds = s.POWER_DOWN_HOLDOFF_BBB)
+        self._power_up_holdoff = timedelta(seconds=s.POWER_UP_HOLDOFF_BBB)
+        self._instantiated = datetime.now()
 
         with self._pin_lock:
             log.debug("Setting pin %s to output HIGH for %s", self.pin, self)
             GPIO.setup(pin, GPIO.OUT)
             GPIO.output(pin, GPIO.HIGH)
 
-    def power_up(self, wait_for_connection=True):
+    def _power_up(self) -> None:
         """
-        Power up a BBBWorker by pulsing its PWR_BUT line low for BTN_PRESS_DELAY sec
-
-        @throws WorkerHoldoffException if the holdoff period has yet to expire
+        Power up a BBBWorker by pulsing its PWR_BUT line low for BTN_PRESS_DELAY sec. Should only
+        be called by the ActionableIOEvent, which will enforce holdoff periods
         """
-        # Obey power-up holdoff period
-        self._raise_if_holding_off(
-            WorkerHoldoffException("Too early to power-up {}".format(self)),
-            self._power_up_holdoff
-        )
         log.debug("%s attempting to acquire pin lock on %s", self, self.pin)
         with self._pin_lock:
-            log.debug("%s acquired pin lock on %s", self, self.pin)
-            retries = 0
-            first_attempt_time = datetime.now()
-            while retries < s.POWER_UP_MAX_RETRIES:
-                log.info("Attempting to power up %s (try #%d)", self, retries)
-                GPIO.output(self.pin, GPIO.LOW)
-                time.sleep(s.BTN_PRESS_DELAY)
-                GPIO.output(self.pin, GPIO.HIGH)
-
-                if wait_for_connection:
-                    # User requested we block until the freshly-booted worker connects
-                    try:
-                        self._wait_for_connection(first_attempt_time)
-                    except WorkerTimeoutException:
-                        retries += 1
-                        continue
-                else:
-                    # No waiting requested, so just return
-                    return
-
-            # Reaching this point means we ran out of retries
-            log.error("No connection from %s after %d attempts. Giving up.", self, retries)
-        return
+            log.info("Attempting to power up %s", self)
+            GPIO.output(self.pin, GPIO.LOW)
+            sleep(s.BTN_PRESS_DELAY)
+            GPIO.output(self.pin, GPIO.HIGH)
 
     def power_down_payload(self) -> bytes:
         """
-        Returns ASCII-encoded bytes for JSON "PWROFF" command
-
-        @throws WorkerHoldoffException if the holdoff period has yet to expire
+        Returns ASCII-encoded bytes for JSON "PWROFF" command IF holdoff period expired. Otherwise
+        returns reboot payload.
         """
-        # Obey power-down holdoff period
-        self._raise_if_holding_off(
-            WorkerHoldoffException("Too early to power-down {}".format(self)),
-            self._power_down_holdoff
-        )
-        # We acquire the lock to prevent sending PWROFF in the midd
-        with self._pin_lock:
-            return (json.dumps({
-                    "i_id": "PWROFF",
-                    "f_id": "fwrite",
-                    "f_args": {"path": "/proc/sysrq-trigger", "data": "o"},
-                }) + "\n").encode(encoding="ascii")
-
-    def __repr__(self) -> str:
-        return "BBBWorker" + str(self.id)
+        # This func. isn't called by an ActionableIOEvent, so enforce holdoffs ourselves
+        if datetime.now() - self._instantiated < self._power_down_holdoff:
+            with self._pin_lock:
+                return (
+                    json.dumps(
+                        {
+                            "i_id": "PWROFF",
+                            "f_id": "fwrite",
+                            "f_args": {"path": "/proc/sysrq-trigger", "data": "o"},
+                        }
+                    )
+                    + "\n"
+                ).encode(encoding="ascii")
+        else:
+            return self.reboot_payload()
 
 
 class VMWorker(Worker):
-    def __init__(self, id, pin) -> None:
-        super.__init__(id, pin)
+    def __init__(self, id: int, pin: str) -> None:
+        super().__init__(id, pin, s.POWER_UP_HOLDOFF_VM, s.POWER_DOWN_HOLDOFF_VM)
 
-        self._power_up_holdoff = timedelta(seconds = s.POWER_UP_HOLDOFF_VM)
-        self._power_down_holdoff = timedelta(seconds = s.POWER_DOWN_HOLDOFF_VM)
-
-    def power_up(self, wait_for_connection=True):
+    def _power_up(self) -> None:
         """
-        Power up this VMWorker by sending a kvm command to the NC server.
-
-        @throws WorkerHoldoffException if the holdoff period has yet to expire
+        Power up this VMWorker by sending a kvm command to the NC server. Should only
+        be called by the ActionableIOEvent, which will enforce holdoff periods
         """
-        # Obey power-up holdoff period
-        self._raise_if_holding_off(
-            WorkerHoldoffException("Too early to power-up {}".format(self)),
-            self._power_up_holdoff
-        )
-        log.debug("%s attempting to acquire pin lock on %s", self, self.pin)
         with self._pin_lock:
-            log.debug("%s acquired pin lock on %s", self, self.pin)
-            retries = 0
-            first_attempt_time = datetime.now()
-            while retries < s.POWER_UP_MAX_RETRIES:
-                log.info("Attempting to power up %s (try #%d)", self, retries)
+            log.info("Attempting to power up %s", self)
+            nc = Netcat(s.NC_IP, s.NC_PORT)
+            mac_addr = "DE:AD:BE:EF:00" + self.pin
+            boot_args = (
+                "ip=192.168.1."
+                + str(self.id)
+                + "::192.168.1.1:255.255.255.0:worker"
+                + str(self.id)
+                + ":eth0:off:1.1.1.1:8.8.8.8:209.50.63.74 "
+                + " reboot=t quiet loglevel=0 root=/dev/ram0 rootfstype=ramfs rdinit=/sbin/init console=ttyS0"
+            )
+            kvm_cmd = (
+                ' kvm -M microvm -vga none -no-user-config -nographic -kernel bzImage  -append "'
+                + boot_args
+                + '" -netdev tap,id=net0,script=bin/ifup.sh,downscript=bin/ifdown.sh    -device virtio-net-device,netdev=net0,mac='
+                + mac_addr
+                + " &"
+            )
+            log.debug("Sending nc command %s to power-up %s", kvm_cmd, self)
+            nc.write((kvm_cmd + " \n").encode(encoding="ascii"))
+            nc.close()
 
-                nc = Netcat(s.NC_IP, s.NC_PORT)
-                mac_addr = "DE:AD:BE:EF:00" + self.pin
-                boot_args = (
-                    "ip=192.168.1."
-                    + str(self.id)
-                    + "::192.168.1.1:255.255.255.0:worker"
-                    + str(self.id)
-                    + ":eth0:off:1.1.1.1:8.8.8.8:209.50.63.74 "
-                    + " reboot=t quiet loglevel=0 root=/dev/ram0 rootfstype=ramfs rdinit=/sbin/init console=ttyS0"
-                )
-                kvm_cmd = (
-                    ' kvm -M microvm -vga none -no-user-config -nographic -kernel bzImage  -append "'
-                    + boot_args
-                    + '" -netdev tap,id=net0,script=bin/ifup.sh,downscript=bin/ifdown.sh    -device virtio-net-device,netdev=net0,mac='
-                    + mac_addr
-                    + " &"
-                )
-                log.debug("Sending nc command %s to power-up %s", kvm_cmd, self)
-                nc.write((kvm_cmd + " \n").encode())
-                nc.close()
-
-                if wait_for_connection:
-                    # User requested we block until the freshly-booted worker connects
-                    try:
-                        self._wait_for_connection(first_attempt_time)
-                    except WorkerTimeoutException:
-                        retries += 1
-                        continue
-                else:
-                    # No waiting requested, so just return
-                    return
-
-            # Reaching this point means we ran out of retries
-            log.error("No connection from %s after %d attempts. Giving up.", self, retries)
-        return
-
-    def power_down_externally(self):
+    def _power_down_externally(self) -> None:
         """
         Powers down this VMWorker by sending a pkill command to the NC server, BLOCKING if
-        necessary (e.g., because a power-up command is currently in progress)
-
-        @throws WorkerHoldoffException if the holdoff period has yet to expire
+        necessary (e.g., because a power-up command is currently in progress). Should only
+        be called by the ActionableIOEvent, which will enforce holdoff periods
         """
-        # Obey power-down holdoff period
-        self._raise_if_holding_off(
-            WorkerHoldoffException("Too early to power-down {}".format(self)),
-            self._power_down_holdoff
-        )
         with self._pin_lock:
             log.debug("Sending pkill to %s", self)
             nc = Netcat(s.NC_IP, s.NC_PORT)
-            poweroff_cmd = "pkill -of \"" + self.pin + "\"\n"
+            poweroff_cmd = 'pkill -of "' + self.pin + '"\n'
             nc.write(poweroff_cmd.encode(encoding="ascii"))
             nc.close()
-
-    def __repr__(self) -> str:
-        return "VMWorker" + str(self.id)
