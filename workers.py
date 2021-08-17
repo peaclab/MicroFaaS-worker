@@ -40,19 +40,12 @@ class InputEvents(IOEventGroup):
 class OutputEvents(IOEventGroup):
     """Outputs from a Worker's internal state machine"""
 
-    def __init__(
-        self,
-        id: str,
-        power_up_action: Callable[[], Any],
-        power_up_holdoff: int,
-        power_down_action: Callable[[], None],
-        power_down_holdoff: int,
-    ):
-        # DEQUEUE and REBOOT only control fetched payloads, so they don't need to be Actionable
+    def __init__(self, id: str):
+        super().__init__(id)
         self.DEQUEUE = IOEvent(id + ":DEQUEUE")
         self.REBOOT = IOEvent(id + ":REBOOT")
-        self.POWER_UP = ActionableIOEvent(id + ":POWER_UP", power_up_action, power_up_holdoff)
-        self.POWER_DOWN = ActionableIOEvent(id + ":POWER_DOWN", power_down_action, power_down_holdoff)
+        self.POWER_UP = IOEvent(id + ":POWER_UP")
+        self.POWER_DOWN = IOEvent(id + ":POWER_DOWN")
 
 
 class Worker:
@@ -60,7 +53,7 @@ class Worker:
     Base class for workers
     """
 
-    def __init__(self, id: int, pin: str, power_up_holdoff: int, power_down_holdoff: int):
+    def __init__(self, id: int, pin: str):
         # Basics
         # ID of the worker is assumed to be last octet its IPv4 address
         self.id = id
@@ -71,11 +64,9 @@ class Worker:
         self._state = WorkerState.UNKNOWN
         self._state_machine_thread = None
         
-        # State machine I/O
-        self._I = InputEvents(str(self) + "-I")
-        self._O = OutputEvents(
-            str(self) + "-O", self._power_up, power_up_holdoff, self._power_down, power_down_holdoff
-        )
+        # State machine I/O (initialized in activate())
+        self._I = None
+        self._O = None
 
         # Track how long the state machine is in each state
         self.cycle_counts = {}
@@ -86,10 +77,22 @@ class Worker:
         self.pin = pin
         self._pin_lock = threading.Lock()
 
+        # Constants (may be overridden in unit tests)
+        self.JOB_TIMEOUT = s.JOB_TIMEOUT
+        self.POWER_UP_TIMEOUT = s.POWER_UP_TIMEOUT
+        self.UNKNOWN_TIMEOUT = s.UNKNOWN_TIMEOUT
+    
+    def _initalize_IO(self) -> None:
+        """Setup this Worker's Input and OutputEvents"""
+        self._I = InputEvents(str(self) + "-I")
+        self._O = OutputEvents(str(self) + "-O")
+
+
     def activate(self) -> None:
         """
         Start this Worker's state machine monitoring thread. 
         """
+        self._initalize_IO()
         self._state_machine_thread = threading.Thread(target=self._state_machine, daemon=True)
         self._active = True
         self._state_machine_thread.start()
@@ -104,12 +107,11 @@ class Worker:
         self._active = False
         if join:
             try:
-                self._state_machine_thread.join(timeout=120)
+                self._state_machine_thread.join(timeout=s.JOB_TIMEOUT)
             except AttributeError:
                 pass
             if self._state_machine_thread.is_alive():
                 raise RuntimeError("Failed to stop state machine before timeout")
-
 
     def is_active(self) -> bool:
         """
@@ -123,13 +125,14 @@ class Worker:
 
             if self.in_state(WorkerState.POWERING_UP):
                 self._O.POWER_DOWN.clear()  # Just in case we're exiting holdoff
-                if self._I.WORKER_REQUEST.wait_then_clear(timeout=60):
-                    if self._I.QUEUE_NOT_EMPTY.wait(timeout=1):
+                if self._I.WORKER_REQUEST.wait(timeout=self.POWER_UP_TIMEOUT):
+                    if self._I.QUEUE_NOT_EMPTY.is_set():
                         self._O.DEQUEUE.set()
                         self._set_state(WorkerState.WORKING)
                     else:
                         self._O.POWER_DOWN.set()
                         self._set_state(WorkerState.OFF)
+                    self._I.WORKER_REQUEST.clear()
                 else:
                     # Timeout
                     self._O.POWER_UP.set()
@@ -137,13 +140,14 @@ class Worker:
 
             elif self.in_state(WorkerState.WORKING):
                 self._O.POWER_DOWN.clear()  # Just in case we're exiting holdoff
-                if self._I.WORKER_REQUEST.wait_then_clear(timeout=120):
-                    if self._I.QUEUE_NOT_EMPTY.wait(timeout=1):
+                if self._I.WORKER_REQUEST.wait(timeout=self.JOB_TIMEOUT):
+                    if self._I.QUEUE_NOT_EMPTY.is_set():
                         self._O.REBOOT.set()
                         self._set_state(WorkerState.REBOOTING)
                     else:
                         self._O.POWER_DOWN.set()
                         self._set_state(WorkerState.OFF)
+                    self._I.WORKER_REQUEST.clear()
                 else:
                     # Timeout
                     self._set_state(WorkerState.UNKNOWN)
@@ -151,31 +155,37 @@ class Worker:
             elif self.in_state(WorkerState.REBOOTING):
                 self._O.POWER_UP.clear()  # Just in case we're exiting holdoff
                 self._O.POWER_DOWN.clear()  # Ditto
-                if self._I.WORKER_REQUEST.wait_then_clear(timeout=120):
-                    if self._I.QUEUE_NOT_EMPTY.wait(timeout=1):
+                if self._I.WORKER_REQUEST.wait(timeout=self.POWER_UP_TIMEOUT):
+                    if self._I.QUEUE_NOT_EMPTY.is_set():
                         self._O.DEQUEUE.set()
                         self._set_state(WorkerState.WORKING)
                     else:
                         self._O.POWER_DOWN.set()
                         self._set_state(WorkerState.OFF)
+                    self._I.WORKER_REQUEST.clear()
                 else:
                     # Timeout
                     self._set_state(WorkerState.UNKNOWN)
 
             elif self.in_state(WorkerState.OFF):
                 self._O.POWER_UP.clear()  # Just in case we're exiting holdoff
-                if self._I.QUEUE_NOT_EMPTY.wait(timeout=1):
+                if self._I.QUEUE_NOT_EMPTY.is_set():
                     self._O.POWER_UP.set()
                     self._set_state(WorkerState.POWERING_UP)
-                elif self._I.WORKER_REQUEST.wait_then_clear(timeout=1):
+                elif self._I.WORKER_REQUEST.is_set():
                     # We got a worker request during OFF with an empty queue?
                     self._O.POWER_DOWN.set()
                     self._set_state(WorkerState.OFF)
+                    self._I.WORKER_REQUEST.clear()
+                else:
+                    # Nothing happening, yield a little CPU time
+                    sleep(0.5)
 
             elif self.in_state(WorkerState.UNKNOWN):
-                if self._I.WORKER_REQUEST.wait_then_clear(timeout=30):
+                if self._I.WORKER_REQUEST.wait(timeout=self.UNKNOWN_TIMEOUT):
                     self._O.REBOOT.set()
                     self._set_state(WorkerState.REBOOTING)
+                    self._I.WORKER_REQUEST.clear()
                 else:
                     # Timeout
                     self._O.POWER_UP.set()
@@ -193,37 +203,45 @@ class Worker:
 
         @returns payload if appropriate, otherwise None
         """
-        self._I.WORKER_REQUEST.set()
-        # Block until flag acknowledged and cleared by monitor thread
-        while self._I.WORKER_REQUEST.is_set():
-            sleep(0.1)
+        if self.is_active():
+            self._I.WORKER_REQUEST.set()
+            # Block until flag acknowledged and cleared by monitor thread
+            while self._I.WORKER_REQUEST.is_set():
+                sleep(0.1)
 
-        # Now check relevant outputs
-        return_payload = None
-        if self._O.DEQUEUE.is_set():
-            self._O.DEQUEUE.clear()
-            try:
-                return_payload = self._dequeue_job()
-            except queue.Empty:
-                log.warning("%s requested job while queue empty", self)
-        elif self._O.REBOOT.is_set():
-            self._O.REBOOT.clear()
-            return_payload = self.reboot_payload()
-        elif self._O.POWER_DOWN.is_set():
-            self._O.POWER_DOWN.clear()
-            try:
-                return self.power_down_payload()
-            except NotImplementedError:
-                # Worker only powers down externally, so payload useless here
-                log.debug("%s should be powering off externally", self)
-        elif self._O.POWER_UP.is_set():
-            # Getting a worker request means we don't need POWER_UP to be set
-            self._O.POWER_UP.clear()
-            # We don't need to do anything else, assuming the monitor takes over here
+            # Now check relevant outputs
+            return_payload = None
+            if self._O.DEQUEUE.is_set():
+                self._O.DEQUEUE.clear()
+                try:
+                    return_payload = self._dequeue_job()
+                except queue.Empty:
+                    log.warning("%s requested job while queue empty", self)
+            elif self._O.REBOOT.is_set():
+                self._O.REBOOT.clear()
+                return_payload = self.reboot_payload()
+            elif self._O.POWER_DOWN.is_set():
+                self._O.POWER_DOWN.clear()
+                try:
+                    return self.power_down_payload()
+                except NotImplementedError:
+                    # Worker only powers down externally, so payload useless here
+                    log.debug("%s should be powering off externally", self)
+            elif self._O.POWER_UP.is_set():
+                # Getting a worker request means we don't need POWER_UP to be set
+                self._O.POWER_UP.clear()
+                # We don't need to do anything else, assuming the monitor takes over here
+            else:
+                log.warning("%s made request but no output events set", self)
+
+            return return_payload
         else:
-            log.warning("%s made request but no output events set", self)
-
-        return return_payload
+            # Worker is marked inactive and shouldn't be online
+            log.warning("%s connected while inactive. Attempting shutdown", self)
+            try:
+                self._power_down_externally()
+            except NotImplementedError:
+                return self.power_down_payload()
 
     def in_state(self, state) -> bool:
         """
@@ -255,25 +273,15 @@ class Worker:
         """
         try:
             return self._job_queue.get_nowait().encode(encoding="ascii")
-        except queue.Empty as ex:
-            self._I.QUEUE_NOT_EMPTY.clear()
-            raise ex
+        finally:
+            if self._job_queue.empty():
+                self._I.QUEUE_NOT_EMPTY.clear()
 
     def _power_up(self) -> None:
         """
         Power up a worker
         """
         raise NotImplementedError("power_up must be implemented in subclass")
-
-    def _power_down(self) -> Optional[bytes]:
-        """
-        Helper method. May or may not return a payload. You're better off using either
-        power_down_externally() or power_down_payload() directly
-        """
-        try:
-            self._power_down_externally()
-        except NotImplementedError:
-            return self.power_down_payload()
 
     def _power_down_externally(self) -> None:
         """
@@ -312,17 +320,31 @@ class Worker:
         return self.__class__.__name__ + str(self.id)
 
 
+class BBBOutputEvents(OutputEvents):
+    """Outputs from a BBBWorker's internal state machine"""
+
+    def __init__(self, id: str, power_up_action: Callable[[], Any], power_up_holdoff: int):
+        super().__init__(id)
+        # Redefine POWER_UP to be Actionable
+        self.POWER_UP = ActionableIOEvent(id + ":POWER_UP", power_up_action, power_up_holdoff)
+
+
 class BBBWorker(Worker):
     def __init__(self, id: int, pin: str):
-        super().__init__(id, pin, s.POWER_UP_HOLDOFF_BBB, s.POWER_DOWN_HOLDOFF_BBB)
-
+        super().__init__(id, pin)
         self._power_up_holdoff = timedelta(seconds=s.POWER_UP_HOLDOFF_BBB)
+        self._power_down_holdoff = timedelta(seconds=s.POWER_DOWN_HOLDOFF_BBB)
         self._instantiated = datetime.now()
 
         with self._pin_lock:
             log.debug("Setting pin %s to output HIGH for %s", self.pin, self)
             GPIO.setup(pin, GPIO.OUT)
             GPIO.output(pin, GPIO.HIGH)
+
+    def _initalize_IO(self) -> None:
+        """Initialize this BBBWorker's Input and Output events. Called by activate()"""
+        self._I = InputEvents(str(self) + "-I")
+        self._O = BBBOutputEvents(str(self) + "-O", self._power_up, self._power_up_holdoff.seconds)
 
     def _power_up(self) -> None:
         """
@@ -342,7 +364,7 @@ class BBBWorker(Worker):
         returns reboot payload.
         """
         # This func. isn't called by an ActionableIOEvent, so enforce holdoffs ourselves
-        if datetime.now() - self._instantiated < self._power_down_holdoff:
+        if datetime.now() - self._instantiated > self._power_down_holdoff:
             with self._pin_lock:
                 return (
                     json.dumps(
@@ -357,10 +379,40 @@ class BBBWorker(Worker):
         else:
             return self.reboot_payload()
 
+class VMOutputEvents(OutputEvents):
+    """Outputs from a VMWorker's internal state machine"""
+
+    def __init__(
+        self,
+        id: str,
+        power_up_action: Callable[[], Any],
+        power_up_holdoff: int,
+        power_down_action: Callable[[], None],
+        power_down_holdoff: int,
+    ):
+        super().__init__(id)
+        # Redefine POWER_UP and POWER_DOWN to be actionable
+        self.POWER_UP = ActionableIOEvent(id + ":POWER_UP", power_up_action, power_up_holdoff)
+        self.POWER_DOWN = ActionableIOEvent(id + ":POWER_DOWN", power_down_action, power_down_holdoff)
 
 class VMWorker(Worker):
     def __init__(self, id: int, pin: str) -> None:
         super().__init__(id, pin, s.POWER_UP_HOLDOFF_VM, s.POWER_DOWN_HOLDOFF_VM)
+
+        self._power_up_holdoff = timedelta(seconds=s.POWER_UP_HOLDOFF_VM)
+        self._power_down_holdoff = timedelta(seconds=s.POWER_DOWN_HOLDOFF_VM)
+
+    def _initalize_IO(self) -> None:
+        """Initialize this VMWorker's Input and Output events. Called by activate()"""
+        # State machine I/O
+        self._I = InputEvents(str(self) + "-I")
+        self._O = VMOutputEvents(
+            str(self) + "-O", 
+            self._power_up, 
+            self._power_up_holdoff.seconds, 
+            self._power_down_externally, 
+            self._power_down_holdoff.seconds
+        )
 
     def _power_up(self) -> None:
         """

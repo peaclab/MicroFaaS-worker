@@ -31,8 +31,11 @@ LAST_CONNECTION_TIMEOUT = 10
 # Job timeout
 JOB_TIMEOUT = 120
 
-# How many times to retry a power-up request (see LAST_CONNECTION_TIMEOUT)
-POWER_UP_MAX_RETRIES = 6
+# How long to wait for a worker to boot
+POWER_UP_TIMEOUT = 60
+
+# How long to wait for a worker in an "unknown" state to connect before taking corrective action
+UNKNOWN_TIMEOUT = 30
 
 # How long (in seconds) to wait after script start before issuing power up/down commands
 # Useful if you're starting an experiment with pre-powered-up workers

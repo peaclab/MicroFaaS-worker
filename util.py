@@ -50,14 +50,13 @@ class ActionableIOEvent(IOEvent):
             sleep(self._holdoff)
 
         while True:
-            self.wait_then_clear()
+            self.wait()
             try:
                 self._action()
-            except NotImplementedError:
-                # Probably means we called power_down_externally for an unsupported worker
-                pass
+                self.clear()
             except Exception as ex:
                 log.error("Action for %s threw exception: %s", self, ex)
+                sleep(5)
 
 
 class IOEventGroup():
