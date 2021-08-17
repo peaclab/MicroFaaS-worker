@@ -102,7 +102,7 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
             self.data = self.request.recv(12288).strip()
             recv_time = time.monotonic() * 1000
         except socket.timeout:
-            log.error("Timed out waiting for worker %s to run %s", self.worker_id, job_json)
+            log.error("Timed out waiting for worker %s to run %s", self.worker_id, ascii_encoded_json_job)
             return
 
         # Calculate Round Trip Time
