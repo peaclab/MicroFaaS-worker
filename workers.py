@@ -264,6 +264,12 @@ class Worker:
         self._job_queue.put_nowait(job)
         self._I.QUEUE_NOT_EMPTY.set()
 
+    def job_queue_empty(self) -> bool:
+        """
+        Check if this worker's queue is empty
+        """
+        return self._job_queue.empty()
+
     def _dequeue_job(self) -> bytes:
         """
         Get the next job from this workers's queue

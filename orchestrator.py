@@ -55,10 +55,11 @@ if ARGS.ids is not None:
     requested_ids = [int(x.strip()) for x in ARGS.ids.split(",")]
     WORKERS = {k:v for k,v in WORKERS.items() if v.id in requested_ids}
 
-log.info("Using the following workers: %s", str(WORKERS.values()))
+log.info("Activating the following workers: %s", str(WORKERS.values()))
+for w in WORKERS.values():
+    w.activate()
 
 START_TIME = datetime.now()
-
 
 class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
     def handle(self):
@@ -84,30 +85,16 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         # Record this connection on the Worker object
         try:
             w = WORKERS[str(self.worker_id)]
-            w.last_connection = datetime.now()
         except KeyError:
             log.error("Worker with unknown ID %s attempted to connect", self.worker_id)
             return
 
         # Send the worker the next item on the queue
-        try:
-            job_json = w.job_queue.get_nowait()
-            send_time = time.monotonic() * 1000
-            self.request.sendall((job_json + "\n").encode(encoding="ascii"))
-            log.info("Transmitted work to %s", w)
-            log.debug(job_json)
-        except queue.Empty:
-            # Worker's queue has been empty since the connection began
-            try:
-                try:
-                    self.request.sendall(w.power_down_payload())
-                except NotImplementedError:
-                    # Worker doesn't support shutting itself down, so send the command out-of-band
-                    w._power_down_externally()
-                log.warning("%s requested work while queue empty. Power-off command sent.", w)
-            except Exception as ex:
-                log.warning("%s requested work while queue empty, but unable to power-off: %s", w, ex)
-            return
+        ascii_encoded_json_job = w.handle_worker_request()
+        send_time = time.monotonic() * 1000
+        self.request.sendall(ascii_encoded_json_job)
+        log.info("Transmitted work to %s", w)
+        log.debug(ascii_encoded_json_job)
 
         # Now we wait for work to happen and results to come back
         # The socket timeout will limit how long we wait
@@ -131,20 +118,8 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
 
         # Check if there's more work for it in its queue
         # If yes, send reboot. Otherwise send shutdown
-        if w.job_queue.empty():
-            try:
-                try:
-                    self.request.sendall(w.power_down_payload())
-                except NotImplementedError:
-                    # Worker doesn't support shutting itself down, so send the command out-of-band
-                    w._power_down_externally()
-                log.info("%s's queue is empty. Sent power-down command.", w)
-            except Exception as ex:
-                log.warning("%s's queue is empty, but unable to power-down: %s", w, ex)
-        else:
-            self.request.sendall(w.reboot_payload())
-            log.debug("Finished handling %s. Sent reboot command.", w)
-
+        self.request.sendall(w.handle_worker_request())
+        log.debug("Finished handling %s", w)
 
 
 class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
@@ -166,11 +141,9 @@ def load_generator(count):
     job_counts = dict({k:(count // len(COMMANDS)) for k, _ in COMMANDS.items()})
     while count > 0:
         for _, w in random.sample(WORKERS.items(), random.randint(1,len(WORKERS))):
-            q_was_empty = w.job_queue.empty()
-            
             try:
                 f_id = random.choice(list(COMMANDS.keys()))
-            except IndexError as e:
+            except IndexError:
                 log.debug("COMMANDS is empty, continuing...")
                 continue
 
@@ -184,7 +157,7 @@ def load_generator(count):
                 # Function arguments
                 "f_args": random.choice(COMMANDS[f_id]),
             }
-            w.job_queue.put_nowait(json.dumps(cmd))
+            w.enqueue_job((json.dumps(cmd) + "\n").encode(encoding="ascii"))
             #log.debug("Added job to worker %s's queue: %s", w.id, json.dumps(cmd))
 
             # Keep track of how many times we've run this job
@@ -194,42 +167,9 @@ def load_generator(count):
                 log.info("Enough invocations of %s have been queued up, so popping from COMMANDS", f_id)
                 COMMANDS.pop(f_id, None)
 
-            if q_was_empty:
-                # This worker's queue was empty, meaning it probably isn't
-                # powered on right now. Now that it has work, power it up
-                # asynchronously (so that this thread can continue)
-                try:
-                    w.power_up_async()
-                    log.info("%s has work to do, requested async power-up", w)
-                except Exception as ex:
-                    log.debug("%s has work to do, but unable to power-up: %s", w, ex)
-                except RuntimeError as ex:
-                    log.error("Potential race condition/deadlock: %s", ex)
             count -= 1
         time.sleep(s.LOAD_GEN_PERIOD)
     log.info("Load generator exiting (queuing complete)")
-
-def health_monitor(timeout=120):
-    timeout_delta = timedelta(seconds=timeout)
-    all_queues_not_empty = True
-    while all_queues_not_empty:
-        all_queues_not_empty = False
-        for _, w in WORKERS.items():
-            if (not w.job_queue.empty() 
-                  and w.last_connection != datetime.min
-                  and datetime.now() - w.last_connection > timeout_delta):
-                try:
-                    w.power_up_async(block_if_locked=False)
-                    log.warning("Haven't heard from %s since %s, requested power-up", w, w.last_connection)
-                except Exception as ex:
-                    log.warning("Haven't heard from %s since %s, but unable to power-up: %s", w, w.last_connection, ex)
-                except RuntimeError as ex:
-                    log.error("Haven't heard from %s since %s, but unable to power-up: %s", w, w.last_connection, ex)
-
-            # Check queues again
-            all_queues_not_empty = all_queues_not_empty or not w.job_queue.empty()
-        time.sleep(5)
-    log.info("Health monitor exiting (all queues empty)")
 
 if __name__ == "__main__":
 
@@ -241,12 +181,6 @@ if __name__ == "__main__":
         target=load_generator, daemon=False, args=(s.FUNC_EXEC_COUNT,)
     )
     load_gen_thread.start()
-
-    # Set up health monitor thread
-    health_monitor_thread = threading.Thread(
-        target=health_monitor, daemon=True
-    )
-    health_monitor_thread.start()
 
     # Set up server thread
     server = ThreadedTCPServer((s.HOST, s.PORT), ThreadedTCPRequestHandler)
@@ -269,7 +203,7 @@ if __name__ == "__main__":
         while all_queues_not_empty:
             all_queues_not_empty = False
             for _, w in WORKERS.items():
-                all_queues_not_empty = all_queues_not_empty or not w.job_queue.empty()
+                all_queues_not_empty = all_queues_not_empty or not w.job_queue_empty()
             time.sleep(2)
 
         server.shutdown()
