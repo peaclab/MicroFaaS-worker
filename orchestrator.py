@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 import argparse
-import csv
 import json
 import logging as log
-import os
 import queue
 import random
 import socket
@@ -11,15 +9,15 @@ import socketserver
 import string
 import threading
 import time
-from binascii import hexlify
 from datetime import datetime, timedelta
 from json.decoder import JSONDecodeError
-from zlib import compress
 
 from numpy import random as nprand
 
 import settings as s
-from workers import BBBWorker, VMWorker, WorkerHoldoffException
+from recording import ThreadsafeCSVWriter
+from workers import BBBWorker, VMWorker
+from commands import COMMANDS
 
 # Log Level
 log.basicConfig(level=s.LOG_LEVEL)
@@ -31,8 +29,16 @@ parser.add_argument('--bbb', action='store_true', help="Only use BBBWorkers")
 parser.add_argument('--ids', action="store", help="Only use workers with specified IDs in comma-separated list (may be further constrained by --vm or --bbb)")
 ARGS = parser.parse_args()
 
-# Calculate worker set
-WORKERS = s.AVAILABLE_WORKERS
+# Generate worker set
+WORKERS = {}
+for id, worker_tuple in s.AVAILABLE_WORKERS.items():
+    if worker_tuple[0] == "BBBWorker":
+        WORKERS[id] = BBBWorker(int(id), worker_tuple[1])
+    elif worker_tuple[0] == "VMWorker":
+        WORKERS[id] = VMWorker(int(id), worker_tuple[1])
+    else:
+        log.error("Bad worker specification: %s %s", id, worker_tuple)
+
 POSTFIX = ""
 if ARGS.vm and ARGS.bbb:
     raise argparse.ArgumentError("Cannot combine options --vm and --bbb")
@@ -52,233 +58,6 @@ if ARGS.ids is not None:
 log.info("Using the following workers: %s", str(WORKERS.values()))
 
 START_TIME = datetime.now()
-
-class ThreadsafeCSVWriter:
-    def __init__(self, metric_path="microfaas-log.csv", result_path="microfaas-results.csv") -> None:
-        self._file_lock = threading.Lock()
-        self._metric_file_handle = open(metric_path, "a+t")
-        self._result_file_handle = open(result_path, "a+t")
-        self._metric_writer = csv.DictWriter(
-            self._metric_file_handle,
-            fieldnames=[
-                "invocation_id",
-                "worker",
-                "function_id",
-                "exec_time",
-                "rtt",
-                "timestamp"
-            ],
-        )
-        self._result_writer = csv.DictWriter(
-            self._result_file_handle,
-            fieldnames=[
-                "invocation_id",
-                "result",
-            ],
-        )
-
-        with self._file_lock:
-            self._metric_writer.writeheader()
-            self._metric_file_handle.flush()
-            os.fsync(self._metric_file_handle)
-
-            self._result_writer.writeheader()
-            self._result_file_handle.flush()
-            os.fsync(self._result_file_handle)
-
-    def __del__(self):
-        with self._file_lock:
-            self._metric_file_handle.flush()
-            os.fsync(self._metric_file_handle)
-            self._metric_file_handle.close()
-
-            self._result_file_handle.flush()
-            os.fsync(self._result_file_handle)
-            self._result_file_handle.close()
-
-    def save_raw_result(self, worker_id, data_json, rtt, timestamp):
-        """
-        Process and save a raw JSON string recv'd from a worker to CSV
-        """
-
-        # data_json should look like {i_id, f_id, result, exec_time}
-        # where exec_time is in milliseconds
-        try:
-            data = json.loads(data_json)
-        except JSONDecodeError as e:
-            log.error("Cannot save malformed JSON from worker %s: %s", worker_id, e)
-            return False
-
-        # Convert relative timestamps to absolutes, and milliseconds to fractional seconds
-        try:
-            metric_row = {
-                "invocation_id": data["i_id"],
-                "worker": worker_id,
-                "function_id": data["f_id"],
-                "exec_time": int(data["exec_time"]),
-                "rtt": int(rtt),
-                "timestamp": timestamp
-            }
-
-            result_row = {
-                "invocation_id": data["i_id"],
-                "result": data['result']
-            }
-        except KeyError as e:
-            log.error("Bad schema: %s", e)
-            return False
-        except ValueError as e:
-            log.error("Bad cast: %s", e)
-            return False
-
-        with self._file_lock:
-            self._metric_writer.writerow(metric_row)
-            self._metric_file_handle.flush()
-            os.fsync(self._metric_file_handle)
-
-            self._result_writer.writerow(result_row)
-            self._result_file_handle.flush()
-            os.fsync(self._result_file_handle)
-
-        return metric_row['invocation_id']
-
-# Supported workload functions and sample inputs.
-# Make sure COMMANDS.keys() matches your workers' FUNCTIONS.keys()!
-# Hardcode seeds for reproducibility
-random.seed("MicroFaaS", version=2)
-nprand.seed(63302)
-matrix_sizes = list([random.randint(2, 10) for _ in range(10)])
-COMMANDS = {
-    "float_operations": [{"n": random.randint(1, 1000000)} for _ in range(10)],
-    "cascading_sha256": [
-        {  # data is 64 random chars, rounds is rand int upto 1 mil
-            "data": "".join(random.choices(string.ascii_letters + string.digits, k=64)),
-            "rounds": random.randint(1, 10000),
-        }
-        for _ in range(10)
-    ],
-    "cascading_md5": [
-        {  # data is 64 random chars, rounds is rand int upto 1 mil
-            "data": "".join(random.choices(string.ascii_letters + string.digits, k=64)),
-            "rounds": random.randint(1, 10000),
-        }
-        for _ in range(10)
-    ],
-    "matmul": [
-        {
-            "A": nprand.random((matrix_sizes[n], matrix_sizes[n])).tolist(),
-            "B": nprand.random((matrix_sizes[n], matrix_sizes[n])).tolist()
-        } for n in range(10)
-    ],
-    "html_generation": [{"n": random.randint(1, 128)} for _ in range(10)],
-    "pyaes": [
-        {  # data is 16*n random chars, rounds is rand int upto 10k
-            "data": "".join(random.choices(string.ascii_letters + string.digits, k=random.randint(1,10)*16)),
-            "rounds": random.randint(1, 10000),
-        }
-        for _ in range(10)
-    ],
-    "zlib_decompress": [ # Having a little fun here, as random strings don't compress well
-        {"data": hexlify(compress(b"It was the best of times.\nIt was the worst of times.")).decode("ascii")},
-        {"data": hexlify(compress(b"Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.")).decode("ascii")},
-        {"data": hexlify(compress(b"But I must explain to you how all this mistaken idea of denouncing pleasure and praising pain was born and I will give you a complete account of the system, and expound the actual teachings of the great explorer of the truth, the master-builder of human happiness. No one rejects, dislikes, or avoids pleasure itself, because it is pleasure, but because those who do not know how to pursue pleasure rationally encounter consequences that are extremely painful. Nor again is there anyone who loves or pursues or desires to obtain pain of itself, because it is pain, but because occasionally circumstances occur in which toil and pain can procure him some great pleasure. To take a trivial example, which of us ever undertakes laborious physical exercise, except to obtain some advantage from it? But who has any right to find fault with a man who chooses to enjoy a pleasure that has no annoying consequences, or one who avoids a pain that produces no resultant pleasure?")).decode("ascii")},
-        {"data": hexlify(compress(b"We hold these truths to be self-evident, that all men are created equal, that they are endowed by their Creator with certain unalienable Rights, that among these are Life, Liberty and the pursuit of Happiness.--That to secure these rights, Governments are instituted among Men, deriving their just powers from the consent of the governed, --That whenever any Form of Government becomes destructive of these ends, it is the Right of the People to alter or to abolish it, and to institute new Government, laying its foundation on such principles and organizing its powers in such form, as to them shall seem most likely to effect their Safety and Happiness. Prudence, indeed, will dictate that Governments long established should not be changed for light and transient causes; and accordingly all experience hath shewn, that mankind are more disposed to suffer, while evils are sufferable, than to right themselves by abolishing the forms to which they are accustomed.")).decode("ascii")},
-        {"data": hexlify(compress(b"Do not go gentle into that good night,\nOld age should burn and rave at close of day;\nRage, rage against the dying of the light.\n\nThough wise men at their end know dark is right,\nBecause their words had forked no lightning they\nDo not go gentle into that good night.\nGood men, the last wave by, crying how bright\nTheir frail deeds might have danced in a green bay,\nRage, rage against the dying of the light.\n\nWild men who caught and sang the sun in flight,\nAnd learn, too late, they grieved it on its way,\nDo not go gentle into that good night.\n\nGrave men, near death, who see with blinding sight\nBlind eyes could blaze like meteors and be gay,\nRage, rage against the dying of the light.\n\nAnd you, my father, there on the sad height,\nCurse, bless, me now with your fierce tears, I pray.\nDo not go gentle into that good night.\nRage, rage against the dying of the light.")).decode("ascii")},
-    ],
-    "regex_search": [
-        {  # data is 64 random chars, pattern just looks for any digit-nondigit-digit sequence
-            "data": "".join(random.choices(string.ascii_letters + string.digits, k=64)),
-            "pattern": r"\d\D\d",
-        }
-        for _ in range(10)
-    ],
-    "regex_match": [
-        {  # data is 64 random chars, pattern just looks for any digit-nondigit-digit sequence
-            "data": "".join(random.choices(string.ascii_letters + string.digits, k=64)),
-            "pattern": r"\d\D\d",
-        }
-        for _ in range(10)
-    ],
-    "redis_modify": [
-    	  {
-    	      "id": "".join(random.choice(["Jenny", "Jack", "Joe"])),
-    	      "spend": "".join(random.choices(string.digits, k=3))
-    	  }
-    	  for _ in range(10)
-    ],
-    "redis_insert": [
-    	  {
-    	      "id": "".join(random.choices(string.digits, k=10)),
-    	      "balance": "".join(random.choices(string.digits, k=3))
-    	  }
-    	  for _ in range(10)
-    ],
-    "psql_inventory": [
-        # this workload doesn't actually need input, but we need something here
-        # so the load generator will schedule it
-        {"a": 0},
-        {"a": 1},
-        {"a": 2},
-        {"a": 4},
-    ],
-    "psql_purchase": [
-        {  # id is a rand int upto 60
-            "id": random.randint(1, 60)
-        }
-        for _ in range(10)
-    ],
-    "upload_file": [
-        # we upload files that already exist in workers' initramfs (specifically in /etc)
-        # in order to avoid adding or generating dummy files at runtime 
-        {"file": "group"},
-        {"file": "hostname"},
-        {"file": "hosts"},
-        {"file": "inittab"},
-        {"file": "passwd"},
-        {"file": "profile"},
-        {"file": "resolv.conf"},
-        {"file": "shadow"},
-    ],
-    "download_file": [
-        # we assume these files already exist in the MinIO filestore 
-        {"file": "file-sample_1MB.doc"},
-        {"file": "file_example_ODS_5000.ods"},
-        {"file": "file_example_PPT_1MB.ppt"},
-    ],
-    "redis_modify": [
-        {
-            "id": "".join(random.choice(["Jenny", "Jack", "Joe"])),
-            "spend": str(random.randint(0,999))
-    	}
-        for _ in range(10)
-    ],
-    "redis_insert": [
-        {
-            "id": str(random.randint(1000000,9999999)),
-            "balance": str(random.randint(0,999))
-    	}
-    	for _ in range(10)
-    ],
-    "upload_kafka": [
-        {
-            "groupID": 2,
-            "consumerID" : "br1-f2b841dd-1c1a-42b6-9671-0538cd17f138",
-            "topic" : "SampleTopic",
-            "message" : "Hello World ".join(random.choices(string.digits, k=10))
-        }
-        for _ in range(10)
-    ],
-    "read_kafka": [
-        {
-            "groupID": 2,
-            "consumerID" : "br1-f2b841dd-1c1a-42b6-9671-0538cd17f138"
-        }
-    ]
-}
-
-# Reset seeds to "truly" random
-random.seed()
-nprand.seed()
 
 
 class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
@@ -324,9 +103,9 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
                     self.request.sendall(w.power_down_payload())
                 except NotImplementedError:
                     # Worker doesn't support shutting itself down, so send the command out-of-band
-                    w.power_down_externally()
+                    w._power_down_externally()
                 log.warning("%s requested work while queue empty. Power-off command sent.", w)
-            except WorkerHoldoffException as ex:
+            except Exception as ex:
                 log.warning("%s requested work while queue empty, but unable to power-off: %s", w, ex)
             return
 
@@ -358,9 +137,9 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
                     self.request.sendall(w.power_down_payload())
                 except NotImplementedError:
                     # Worker doesn't support shutting itself down, so send the command out-of-band
-                    w.power_down_externally()
+                    w._power_down_externally()
                 log.info("%s's queue is empty. Sent power-down command.", w)
-            except WorkerHoldoffException as ex:
+            except Exception as ex:
                 log.warning("%s's queue is empty, but unable to power-down: %s", w, ex)
         else:
             self.request.sendall(w.reboot_payload())
@@ -422,7 +201,7 @@ def load_generator(count):
                 try:
                     w.power_up_async()
                     log.info("%s has work to do, requested async power-up", w)
-                except WorkerHoldoffException as ex:
+                except Exception as ex:
                     log.debug("%s has work to do, but unable to power-up: %s", w, ex)
                 except RuntimeError as ex:
                     log.error("Potential race condition/deadlock: %s", ex)
@@ -442,7 +221,7 @@ def health_monitor(timeout=120):
                 try:
                     w.power_up_async(block_if_locked=False)
                     log.warning("Haven't heard from %s since %s, requested power-up", w, w.last_connection)
-                except WorkerHoldoffException as ex:
+                except Exception as ex:
                     log.warning("Haven't heard from %s since %s, but unable to power-up: %s", w, w.last_connection, ex)
                 except RuntimeError as ex:
                     log.error("Haven't heard from %s since %s, but unable to power-up: %s", w, w.last_connection, ex)
