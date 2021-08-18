@@ -56,7 +56,8 @@ class TestIOEvent(unittest.TestCase):
         self.assertTrue(self.ev.is_set())
 
     def test_wait_timeout(self):
-        self.assertFalse(self.ev.wait(timeout=1))
+        with self.assertRaises(TimeoutError):
+            self.ev.wait(timeout=1)
         self.assertIsNone(self.ev.value)
         self.assertFalse(self.ev.is_set())
 

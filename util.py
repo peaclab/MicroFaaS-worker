@@ -37,18 +37,21 @@ class IOEvent(Event):
 
     def wait(self, timeout: int = None) -> Union[bool, Any]:
         """
-        Block until internal flag is True or timeout. If timeout, return False. Otherwise, return
-        internal value (if set) or True.
+        Block until internal flag is True or timeout. Return internal value (if set) or True.
+        
+        @throws TimeoutError if timeout occurs
         """
         if super().wait(timeout):
             return self.value if self.value is not None else True
         else:
             # Timeout
-            return False
+            raise TimeoutError
 
     def wait_then_clear(self, timeout: int = None) -> Union[bool, Any]:
         """
         Conveinience method: runs wait(), then clear(). Returns whatever wait() returned.
+
+        @throws TimeoutError if timeout occurs
         """
         retval = self.wait(timeout)
         self.clear()

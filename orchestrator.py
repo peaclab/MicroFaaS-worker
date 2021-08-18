@@ -56,7 +56,7 @@ if ARGS.ids is not None:
     requested_ids = [int(x.strip()) for x in ARGS.ids.split(",")]
     WORKERS = {k:v for k,v in WORKERS.items() if v.id in requested_ids}
 
-log.warning("Activating the following workers: %s", list(WORKERS.values()))
+log.info("Activating the following workers: %s", list(WORKERS.values()))
 for w in WORKERS.values():
     w.activate()
 
@@ -91,7 +91,7 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
             return
 
         # Send the worker the next item on the queue
-        ascii_encoded_json_job = w.handle_worker_request()
+        ascii_encoded_json_job = w.handle_worker_request(1)
         send_time = time.monotonic() * 1000
         self.request.sendall(ascii_encoded_json_job)
         log.info("Transmitted work to %s", w)
@@ -117,9 +117,12 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         else:
             log.info("Processed results of invocation %s from worker %s", writer_result, self.worker_id)
 
-        # Check if there's more work for it in its queue
-        # If yes, send reboot. Otherwise send shutdown
-        self.request.sendall(w.handle_worker_request())
+        # Handle the second worker request: usually says to either shutdown or reboot
+        try:
+            self.request.sendall(w.handle_worker_request(2))
+        except TypeError:
+            log.warning("Telling %s to reboot due to unhandled request", w)
+            self.request.sendall(w.reboot_payload())
         log.debug("Finished handling %s", w)
 
 

@@ -3,7 +3,7 @@ import logging as log
 import queue
 import threading
 from time import sleep
-from typing import Any, Callable, NoReturn, Optional
+from typing import Any, Callable, NoReturn, Optional, Tuple
 from datetime import datetime, timedelta
 from enum import Enum, auto
 
@@ -125,47 +125,53 @@ class Worker:
 
             if self.in_state(WorkerState.POWERING_UP):
                 self._O.POWER_DOWN.clear()  # Just in case we're exiting holdoff
-                if self._I.WORKER_REQUEST.wait(timeout=self.POWER_UP_TIMEOUT):
-                    if self._I.QUEUE_NOT_EMPTY.is_set():
-                        self._O.DEQUEUE.set()
-                        self._set_state(WorkerState.WORKING)
-                    else:
-                        self._O.POWER_DOWN.set()
-                        self._set_state(WorkerState.OFF)
-                    self._I.WORKER_REQUEST.clear()
-                else:
-                    # Timeout
+                worker_request_value, timeout = self._wait_on_worker_request(self.POWER_UP_TIMEOUT)
+                if timeout and self._I.QUEUE_NOT_EMPTY.is_set():
                     self._O.POWER_UP.set()
                     self._set_state(WorkerState.POWERING_UP)
+                elif worker_request_value == 1 and self._I.QUEUE_NOT_EMPTY.is_set():
+                    self._O.DEQUEUE.set()
+                    self._set_state(WorkerState.WORKING)
+                if worker_request_value == 2:
+                    # Errant worker: should only be requesting w/ value=1 in POWERING_UP
+                    self._O.REBOOT.set()
+                    self._set_state(WorkerState.REBOOTING)
+                elif not self._I.QUEUE_NOT_EMPTY.is_set():
+                    # Timeout or worker request while queue empty --> shutdown
+                    self._O.POWER_DOWN.set()
+                    self._set_state(WorkerState.OFF)
+                self._I.WORKER_REQUEST.clear()
 
             elif self.in_state(WorkerState.WORKING):
                 self._O.POWER_DOWN.clear()  # Just in case we're exiting holdoff
-                if self._I.WORKER_REQUEST.wait(timeout=self.JOB_TIMEOUT):
-                    if self._I.QUEUE_NOT_EMPTY.is_set():
-                        self._O.REBOOT.set()
-                        self._set_state(WorkerState.REBOOTING)
-                    else:
-                        self._O.POWER_DOWN.set()
-                        self._set_state(WorkerState.OFF)
-                    self._I.WORKER_REQUEST.clear()
-                else:
-                    # Timeout
+                worker_request_value, timeout = self._wait_on_worker_request(self.JOB_TIMEOUT)
+                if worker_request_value == 1 and self._I.QUEUE_NOT_EMPTY.is_set():
+                    # Errant worker: issue new job
+                    self._O.DEQUEUE.set()
+                    self._set_state(WorkerState.WORKING)
+                elif worker_request_value == 2 and self._I.QUEUE_NOT_EMPTY.is_set():
+                    self._O.REBOOT.set()
+                    self._set_state(WorkerState.REBOOTING)
+                elif timeout:
                     self._set_state(WorkerState.UNKNOWN)
+                elif not self._I.QUEUE_NOT_EMPTY.is_set():
+                    self._O.POWER_DOWN.set()
+                    self._set_state(WorkerState.OFF)
+                self._I.WORKER_REQUEST.clear()
 
             elif self.in_state(WorkerState.REBOOTING):
                 self._O.POWER_UP.clear()  # Just in case we're exiting holdoff
                 self._O.POWER_DOWN.clear()  # Ditto
-                if self._I.WORKER_REQUEST.wait(timeout=self.POWER_UP_TIMEOUT):
-                    if self._I.QUEUE_NOT_EMPTY.is_set():
-                        self._O.DEQUEUE.set()
-                        self._set_state(WorkerState.WORKING)
-                    else:
-                        self._O.POWER_DOWN.set()
-                        self._set_state(WorkerState.OFF)
-                    self._I.WORKER_REQUEST.clear()
-                else:
-                    # Timeout
+                worker_request_value, timeout = self._wait_on_worker_request(self.POWER_UP_TIMEOUT)
+                if worker_request_value == 1 and self._I.QUEUE_NOT_EMPTY.is_set():
+                    self._O.DEQUEUE.set()
+                    self._set_state(WorkerState.WORKING)
+                elif timeout:
                     self._set_state(WorkerState.UNKNOWN)
+                elif not self._I.QUEUE_NOT_EMPTY.is_set():
+                    self._O.POWER_DOWN.set()
+                    self._set_state(WorkerState.OFF)
+                self._I.WORKER_REQUEST.clear()
 
             elif self.in_state(WorkerState.OFF):
                 self._O.POWER_UP.clear()  # Just in case we're exiting holdoff
@@ -182,29 +188,44 @@ class Worker:
                     sleep(0.5)
 
             elif self.in_state(WorkerState.UNKNOWN):
-                if self._I.WORKER_REQUEST.wait(timeout=self.UNKNOWN_TIMEOUT):
-                    self._O.REBOOT.set()
-                    self._set_state(WorkerState.REBOOTING)
-                    self._I.WORKER_REQUEST.clear()
-                else:
-                    # Timeout
+                worker_request_value, timeout = self._wait_on_worker_request(self.UNKNOWN_TIMEOUT)
+                if timeout:
                     self._O.POWER_UP.set()
                     self._set_state(WorkerState.POWERING_UP)
+                else:
+                    self._O.REBOOT.set()
+                    self._set_state(WorkerState.REBOOTING)
+                self._I.WORKER_REQUEST.clear()
 
             else:
                 # Uh oh
                 log.critical("%s entered undefined state %s. Moving to UNKNOWN", self, self._state)
                 self._set_state(WorkerState.UNKNOWN)
 
-    def handle_worker_request(self) -> Optional[bytes]:
+    def _wait_on_worker_request(self, timeout: int = None) -> Tuple[Any, bool]:
+        """
+        Helper method: blocks until WORKER_REQUEST is set or times out
+        
+        @returns tuple of format (worker_request_value, timed_out)
+        """
+        try:
+            worker_request_value = self._I.WORKER_REQUEST.wait(timeout=self.POWER_UP_TIMEOUT)
+            timed_out = False
+        except TimeoutError:
+            worker_request_value = None
+            timed_out = True
+        return (worker_request_value, timed_out)
+
+    def handle_worker_request(self, value: Any = None) -> Optional[bytes]:
         """
         Called from outside the class to indicate that this worker is requesting its next job.
         Triggers the WORKER_REQUEST state machine input. May return a payload if appropriate
 
+        @param value optional value to set when setting WORKER_REQUEST
         @returns payload if appropriate, otherwise None
         """
         if self.is_active():
-            self._I.WORKER_REQUEST.set()
+            self._I.WORKER_REQUEST.set(value)
             # Block until flag acknowledged and cleared by monitor thread
             while self._I.WORKER_REQUEST.is_set():
                 sleep(0.1)
@@ -255,12 +276,16 @@ class Worker:
         """
         self._state = state
 
-    def enqueue_job(self, job: str) -> None:
+    def enqueue_job(self, job: bytes) -> None:
         """
-        Add a job to this worker's queue
+        Add a job (in ASCII-encoded JSON bytestring) to this worker's queue
 
         @throws queue.Full if the queue is full
+        @throws AttributeError or UnicodeError if job is not a valid ASCII bytestring
         """
+        # This statement throws an AttributeError or UnicodeError if job invalid
+        job.decode(encoding="ascii")
+
         self._job_queue.put_nowait(job)
         self._I.QUEUE_NOT_EMPTY.set()
 

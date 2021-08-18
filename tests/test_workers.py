@@ -1,4 +1,5 @@
 from datetime import timedelta
+import queue
 import unittest
 from time import sleep
 import workers
@@ -8,9 +9,9 @@ class TestBBBWorker(unittest.TestCase):
     WRKR_ID = 10
     WRKR_PIN = "P3_4"
     TEST_JOBS = [
-        '[{"i_id": "TEST", "f_id": "reboot", "f_args":{ }}]',
-        "TE5T",
-        '{"name": "MicroFaaS"}',
+        b'[{"i_id": "TEST", "f_id": "reboot", "f_args":{ }}]',
+        b'TE5T',
+        b'{"name": "MicroFaaS"}',
     ]
 
     def setUp(self):
@@ -80,23 +81,23 @@ class TestBBBWorker(unittest.TestCase):
         # Simulate reboot complete. Should receive job
         sleep(1)
         self.assertEqual(
-            self.w.handle_worker_request(), self.TEST_JOBS[0].encode("ascii")
+            self.w.handle_worker_request(1), self.TEST_JOBS[0]
         )
         self.assertTrue(self.w.in_state(workers.WorkerState.WORKING))
         sleep(1)
         # Job complete. Should be told to reboot
-        self.assertEqual(self.w.handle_worker_request(), self.w.reboot_payload())
+        self.assertEqual(self.w.handle_worker_request(2), self.w.reboot_payload())
         sleep(1)
         self.assertTrue(self.w.in_state(workers.WorkerState.REBOOTING))
         # Rebooted. Should rec'v last job
         sleep(0.5)
         self.assertEqual(
-            self.w.handle_worker_request(), self.TEST_JOBS[1].encode("ascii")
+            self.w.handle_worker_request(1), self.TEST_JOBS[1]
         )
         self.assertTrue(self.w.in_state(workers.WorkerState.WORKING))
         sleep(0.5)
         # Final job complete. Should be told to shutdown
-        self.assertEqual(self.w.handle_worker_request(), self.w.power_down_payload())
+        self.assertEqual(self.w.handle_worker_request(2), self.w.power_down_payload())
         self.assertFalse(self.w._I.QUEUE_NOT_EMPTY.is_set())
         self.assertTrue(self.w.in_state(workers.WorkerState.OFF))
         sleep(0.5)
@@ -106,7 +107,7 @@ class TestBBBWorker(unittest.TestCase):
         self.assertTrue(self.w.in_state(workers.WorkerState.POWERING_UP))
         sleep(1)
         self.assertEqual(
-            self.w.handle_worker_request(), self.TEST_JOBS[2].encode("ascii")
+            self.w.handle_worker_request(1), self.TEST_JOBS[2]
         )
         self.assertTrue(self.w.in_state(workers.WorkerState.WORKING))
 
@@ -119,16 +120,16 @@ class TestBBBWorker(unittest.TestCase):
         # Assume worker isn't pre-powered up. Should be told to power-up after timeout
         sleep(self.w.UNKNOWN_TIMEOUT + 1)
         self.assertTrue(self.w.in_state(workers.WorkerState.POWERING_UP))
-        # Assume worker failed to respond within timeout. Should re-enter POWERING_UP
+        # Assume worker failed to respond within timeout. Because queue empty, should goto shutdown
         sleep(self.w.POWER_UP_TIMEOUT + 1)
-        self.assertTrue(self.w.in_state(workers.WorkerState.POWERING_UP))
+        self.assertTrue(self.w.in_state(workers.WorkerState.OFF))
         # Alright now lets send the worker request with an empty queue
-        self.assertEqual(self.w.handle_worker_request(), self.w.power_down_payload())
-        # Should enter shutdown
+        self.assertEqual(self.w.handle_worker_request(1), self.w.power_down_payload())
+        # Should remain in shutdown
         sleep(1)
         self.assertTrue(self.w.in_state(workers.WorkerState.OFF))
         # Let's imagine worker magically rebooted and requested again.
-        self.assertEqual(self.w.handle_worker_request(), self.w.power_down_payload())
+        self.assertEqual(self.w.handle_worker_request(1), self.w.power_down_payload())
         sleep(1)
         self.assertTrue(self.w.in_state(workers.WorkerState.OFF))
         # Now enqueue a job and make sure things go smoothly
@@ -137,14 +138,45 @@ class TestBBBWorker(unittest.TestCase):
         # Simulate reboot complete. Should receive job
         sleep(1)
         self.assertEqual(
-            self.w.handle_worker_request(), self.TEST_JOBS[0].encode("ascii")
+            self.w.handle_worker_request(1), self.TEST_JOBS[0]
         )
         self.assertTrue(self.w.in_state(workers.WorkerState.WORKING))
         sleep(1)
         # Final job complete. Should be told to shutdown
-        self.assertEqual(self.w.handle_worker_request(), self.w.power_down_payload())
+        self.assertEqual(self.w.handle_worker_request(2), self.w.power_down_payload())
         self.assertFalse(self.w._I.QUEUE_NOT_EMPTY.is_set())
         self.assertTrue(self.w.in_state(workers.WorkerState.OFF))
+
+    def test_state_machine_zombie(self):
+        """Tests a path through the state machine where the BBB's worker.py can't reboot properly"""
+        self.w.activate()
+        # Confirm initial state
+        self.assertTrue(self.w.in_state(workers.WorkerState.UNKNOWN))
+        # Preload queue
+        for job in self.TEST_JOBS:
+            self.w.enqueue_job(job)
+        # Assume worker is pre-powered up, makes request(1): expect reboot payload
+        self.assertEqual(self.w.handle_worker_request(1), self.w.reboot_payload())
+        sleep(0.5)
+        self.assertTrue(self.w.in_state(workers.WorkerState.REBOOTING))
+        # Now assume worker failed to reboot, makes request(2): expect None payload
+        self.assertIsNone(self.w.handle_worker_request(2))
+        sleep(0.5)
+        self.assertTrue(self.w.in_state(workers.WorkerState.REBOOTING))
+        # Now artificially empty the queue, triggering !QNE
+        while not self.w.job_queue_empty():
+            try:
+                self.w._dequeue_job()
+            except queue.Empty:
+                pass
+        # Now all the next worker requests should keep us in the OFF state
+        for _ in range(5):
+            sleep(0.1)
+            self.assertEqual(self.w.handle_worker_request(1), self.w.power_down_payload())
+            self.assertTrue(self.w.in_state(workers.WorkerState.OFF))
+            sleep(0.1)
+            self.assertEqual(self.w.handle_worker_request(2), self.w.power_down_payload())
+            self.assertTrue(self.w.in_state(workers.WorkerState.OFF))
 
     def test_power_down_holdoff(self):
         """Tests holdoff obedience of BBBWorker's power down sequence"""
