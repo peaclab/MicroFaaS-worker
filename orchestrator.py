@@ -21,6 +21,7 @@ from commands import COMMANDS
 
 # Log Level
 log.basicConfig(level=s.LOG_LEVEL)
+log.getLogger().setLevel(s.LOG_LEVEL)
 
 # Check command line argument for VM flag
 parser = argparse.ArgumentParser()
@@ -55,7 +56,7 @@ if ARGS.ids is not None:
     requested_ids = [int(x.strip()) for x in ARGS.ids.split(",")]
     WORKERS = {k:v for k,v in WORKERS.items() if v.id in requested_ids}
 
-log.info("Activating the following workers: %s", str(WORKERS.values()))
+log.warning("Activating the following workers: %s", list(WORKERS.values()))
 for w in WORKERS.values():
     w.activate()
 

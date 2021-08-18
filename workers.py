@@ -274,11 +274,11 @@ class Worker:
         """
         Get the next job from this workers's queue
 
-        @returns next job as ASCII-encoded JSON byte string
+        @returns next job (which should be an ASCII-encoded JSON byte string)
         @throws queue.Empty if queue empty
         """
         try:
-            return self._job_queue.get_nowait().encode(encoding="ascii")
+            return self._job_queue.get_nowait()
         finally:
             if self._job_queue.empty():
                 self._I.QUEUE_NOT_EMPTY.clear()
@@ -403,7 +403,7 @@ class VMOutputEvents(OutputEvents):
 
 class VMWorker(Worker):
     def __init__(self, id: int, pin: str) -> None:
-        super().__init__(id, pin, s.POWER_UP_HOLDOFF_VM, s.POWER_DOWN_HOLDOFF_VM)
+        super().__init__(id, pin)
 
         self._power_up_holdoff = timedelta(seconds=s.POWER_UP_HOLDOFF_VM)
         self._power_down_holdoff = timedelta(seconds=s.POWER_DOWN_HOLDOFF_VM)

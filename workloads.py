@@ -188,7 +188,7 @@ def fwrite(params):
     try:
         with open(params["path"], "w") as f:
             f.write(params["data"])
-    except EnvironmentError:
+    except:
         print("ERR: Write request failed. Are sysrq's enabled?")
     return
 
