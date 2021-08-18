@@ -1,7 +1,7 @@
 import logging as log
 from threading import Event, Thread
 from time import sleep
-from typing import Any, Callable, NoReturn
+from typing import Any, Callable, NoReturn, Union
 
 class FakeGPIO:
     """
@@ -25,11 +25,41 @@ class IOEvent(Event):
     def __init__(self, id: str) -> None:
         super().__init__()
         self.id = id
+        self.value = None
 
-    def wait_then_clear(self, timeout: int = None):
+    def set(self, value: Any = None) -> None:
+        """
+        Set the internal flag and (optionally) a value to be retrieved by wait() or
+        wait_then_clear()
+        """
+        self.value = value
+        super().set()
+
+    def wait(self, timeout: int = None) -> Union[bool, Any]:
+        """
+        Block until internal flag is True or timeout. If timeout, return False. Otherwise, return
+        internal value (if set) or True.
+        """
+        if super().wait(timeout):
+            return self.value if self.value is not None else True
+        else:
+            # Timeout
+            return False
+
+    def wait_then_clear(self, timeout: int = None) -> Union[bool, Any]:
+        """
+        Conveinience method: runs wait(), then clear(). Returns whatever wait() returned.
+        """
         retval = self.wait(timeout)
         self.clear()
         return retval
+
+    def clear(self) -> None:
+        """
+        Sets internal flag to False and internal value to None.
+        """
+        self.value = None
+        super().clear()
 
     def __repr__(self) -> str:
         return self.__class__.__name__ + ":" + str(self.id)
