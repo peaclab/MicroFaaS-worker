@@ -12,7 +12,7 @@ random.seed("MicroFaaS", version=2)
 nprand.seed(63302)
 matrix_sizes = list([random.randint(2, 10) for _ in range(10)])
 COMMANDS = {
-    "float_operations": [{"n": random.randint(1, 1000000)} for _ in range(10)],
+    "float_operations": [{"n": random.randint(1, 10000)} for _ in range(10)],
     "cascading_sha256": [
         {  # data is 64 random chars, rounds is rand int upto 1 mil
             "data": "".join(random.choices(string.ascii_letters + string.digits, k=64)),
