@@ -276,7 +276,12 @@ BB_WORKERS = {
 WORKERS={}
 if VM_MODE:
     for i in range(int(NUM_WORKERS)):
-        WORKERS[str(103 + i)] = Worker(103 + i,":0"+ str(i))
+        if i <= 9:
+            print(103+i,":0"+str(i))
+            WORKERS[str(103 + i)] = Worker(103 + i,":0"+ str(i))
+        else:
+            print(103+i,":"+str(i))
+            WORKERS[str(103 + i)] = Worker(103 + i,":"+ str(i))
 #    WORKERS = {
 #        "103": Worker(103, ":03"),
 #        "104": Worker(104, ":04"),
