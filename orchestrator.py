@@ -51,7 +51,7 @@ log.basicConfig(level=log.INFO)
 FUNC_EXEC_COUNT = 17000
 
 # How often to populate queues (seconds)
-LOAD_GEN_PERIOD = 0.5
+LOAD_GEN_PERIOD = 1
 
 # How long to wait after script start before issuing startup commands
 INITIAL_HOLDOFF = 0
