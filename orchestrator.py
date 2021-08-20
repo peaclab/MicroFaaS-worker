@@ -458,7 +458,7 @@ COMMANDS = {
     "upload_kafka": [
         {
             "groupID": 2,
-            "consumerID" : "br1-f2b841dd-1c1a-42b6-9671-0538cd17f138",
+            "consumerID" : "br1-0abb4a32-6086-4abc-9c92-9aa2a812f42c",
             "topic" : "SampleTopic",
             "message" : "Hello World ".join(random.choices(string.digits, k=10))
         }
@@ -467,7 +467,7 @@ COMMANDS = {
     "read_kafka": [
         {
             "groupID": 2,
-            "consumerID" : "br1-f2b841dd-1c1a-42b6-9671-0538cd17f138"
+            "consumerID" : "br1-0abb4a32-6086-4abc-9c92-9aa2a812f42c"
         }
     ]
 }
