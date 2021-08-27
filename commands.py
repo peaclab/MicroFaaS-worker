@@ -63,18 +63,18 @@ COMMANDS = {
         for _ in range(10)
     ],
     "redis_modify": [
-    	  {
-    	      "id": "".join(random.choice(["Jenny", "Jack", "Joe"])),
-    	      "spend": "".join(random.choices(string.digits, k=3))
-    	  }
-    	  for _ in range(10)
+        {
+            "id": "".join(random.choice(["Jenny", "Jack", "Joe"])),
+            "spend": str(random.randint(0,999))
+    	}
+        for _ in range(10)
     ],
     "redis_insert": [
-    	  {
-    	      "id": "".join(random.choices(string.digits, k=10)),
-    	      "balance": "".join(random.choices(string.digits, k=3))
-    	  }
-    	  for _ in range(10)
+        {
+            "id": str(random.randint(1000000,9999999)),
+            "balance": str(random.randint(0,999))
+    	}
+    	for _ in range(10)
     ],
     "psql_inventory": [
         # this workload doesn't actually need input, but we need something here
@@ -107,20 +107,6 @@ COMMANDS = {
         {"file": "file-sample_1MB.doc"},
         {"file": "file_example_ODS_5000.ods"},
         {"file": "file_example_PPT_1MB.ppt"},
-    ],
-    "redis_modify": [
-        {
-            "id": "".join(random.choice(["Jenny", "Jack", "Joe"])),
-            "spend": str(random.randint(0,999))
-    	}
-        for _ in range(10)
-    ],
-    "redis_insert": [
-        {
-            "id": str(random.randint(1000000,9999999)),
-            "balance": str(random.randint(0,999))
-    	}
-    	for _ in range(10)
     ],
     "upload_kafka": [
         {
