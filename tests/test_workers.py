@@ -159,8 +159,8 @@ class TestBBBWorker(unittest.TestCase):
         self.assertEqual(self.w.handle_worker_request(1), self.w.reboot_payload())
         sleep(0.5)
         self.assertTrue(self.w.in_state(workers.WorkerState.REBOOTING))
-        # Now assume worker failed to reboot, makes request(2): expect None payload
-        self.assertIsNone(self.w.handle_worker_request(2))
+        # Now assume worker failed to reboot, makes request(2): expect another reboot payload
+        self.assertEqual(self.w.handle_worker_request(2), self.w.reboot_payload())
         sleep(0.5)
         self.assertTrue(self.w.in_state(workers.WorkerState.REBOOTING))
         # Now artificially empty the queue, triggering !QNE

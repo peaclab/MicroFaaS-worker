@@ -169,6 +169,9 @@ class Worker:
                 if worker_request_value == 1 and self._I.QUEUE_NOT_EMPTY.is_set():
                     self._O.DEQUEUE.set()
                     self._set_state(WorkerState.WORKING)
+                if worker_request_value == 2 and self._I.QUEUE_NOT_EMPTY.is_set():
+                    self._O.REBOOT.set()
+                    self._set_state(WorkerState.REBOOTING)
                 elif timeout:
                     self._set_state(WorkerState.UNKNOWN)
                 elif not self._I.QUEUE_NOT_EMPTY.is_set():
@@ -181,6 +184,7 @@ class Worker:
                 if self._I.QUEUE_NOT_EMPTY.is_set():
                     self._O.POWER_UP.set()
                     self._set_state(WorkerState.POWERING_UP)
+                    self._I.WORKER_REQUEST.clear()
                 elif self._I.WORKER_REQUEST.is_set():
                     # We got a worker request during OFF with an empty queue?
                     self._O.POWER_DOWN.set()
@@ -256,7 +260,7 @@ class Worker:
                 self._O.POWER_UP.clear()
                 # We don't need to do anything else, assuming the monitor takes over here
             else:
-                log.warning("%s made request but no output events set", self)
+                log.error("%s made request but no output events set", self)
 
             return return_payload
         else:

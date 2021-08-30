@@ -88,6 +88,10 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
                     self.client_address[0],
                 )
                 return
+        except ConnectionResetError or ConnectionAbortedError:
+            # Ignorable: occurs when worker powers off in the middle of a request
+            log.debug("Connection reset during worker identification")
+            return
 
         # Record this connection on the Worker object
         try:
@@ -120,6 +124,10 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
             recv_time = time.monotonic() * 1000
         except socket.timeout:
             log.error("Timed out waiting for worker %s to run %s", self.worker_id, ascii_encoded_json_job)
+            return
+        except ConnectionResetError or ConnectionAbortedError:
+            # Occurs when worker powers off in the middle of a request. Kinda unusual mid-job
+            log.warning("Connection reset while waiting for %s to run %s", w, ascii_encoded_json_job)
             return
 
         # Calculate Round Trip Time
