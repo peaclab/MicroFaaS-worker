@@ -31,14 +31,20 @@ parser.add_argument('--ids', action="store", help="Only use workers with specifi
 ARGS = parser.parse_args()
 
 # Generate worker set
+def worker_from_tuple(id, worker_tuple):
+    if worker_tuple[0] == "BBBWorker":
+        return BBBWorker(int(id), worker_tuple[1])
+    elif worker_tuple[0] == "VMWorker":
+        return VMWorker(int(id), worker_tuple[1])
+    else:
+        raise RuntimeError("Bad worker specification: {} {}".format(id, worker_tuple))
+
 WORKERS = {}
 for id, worker_tuple in s.AVAILABLE_WORKERS.items():
-    if worker_tuple[0] == "BBBWorker":
-        WORKERS[id] = BBBWorker(int(id), worker_tuple[1])
-    elif worker_tuple[0] == "VMWorker":
-        WORKERS[id] = VMWorker(int(id), worker_tuple[1])
-    else:
-        log.error("Bad worker specification: %s %s", id, worker_tuple)
+    try:
+        WORKERS[id] = worker_from_tuple(id, worker_tuple)
+    except RuntimeError as ex:
+        log.error("Failed to create worker {}: {}", id, ex)
 
 POSTFIX = ""
 if ARGS.vm and ARGS.bbb:
@@ -87,7 +93,17 @@ class ThreadedTCPRequestHandler(socketserver.BaseRequestHandler):
         try:
             w = WORKERS[str(self.worker_id)]
         except KeyError:
-            log.error("Worker with unknown ID %s attempted to connect", self.worker_id)
+            # Unknown or inactive worker connected, try to shutdown
+            try:
+                # See if worker is known-but-inactive
+                worker_tuple = s.AVAILABLE_WORKERS[str(self.worker_id)]
+                pwr_down_payload = worker_from_tuple(self.worker_id, worker_tuple).power_down_inactive()
+                if pwr_down_payload is not None:
+                    self.request.sendall(pwr_down_payload)
+                log.warn("Inactive worker %s attempted to connect, told to power down", self.worker_id)
+            except KeyError:
+                # Connected worker is completely unknown, all we can do is ignore it 
+                log.error("Worker with unknown ID %s attempted to connect", self.worker_id)
             return
 
         # Send the worker the next item on the queue

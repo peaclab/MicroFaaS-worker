@@ -81,6 +81,9 @@ class Worker:
         self.JOB_TIMEOUT = s.JOB_TIMEOUT
         self.POWER_UP_TIMEOUT = s.POWER_UP_TIMEOUT
         self.UNKNOWN_TIMEOUT = s.UNKNOWN_TIMEOUT
+
+        # Record instantiation time (for holdoff enforncement)
+        self._instantiated = datetime.now()
     
     def _initalize_IO(self) -> None:
         """Setup this Worker's Input and OutputEvents"""
@@ -259,10 +262,7 @@ class Worker:
         else:
             # Worker is marked inactive and shouldn't be online
             log.warning("%s connected while inactive. Attempting shutdown", self)
-            try:
-                self._power_down_externally()
-            except NotImplementedError:
-                return self.power_down_payload()
+            return self.power_down_inactive()
 
     def in_state(self, state) -> bool:
         """
@@ -322,14 +322,33 @@ class Worker:
         """
         raise NotImplementedError()
 
-    def power_down_payload(self) -> bytes:
+    def power_down_payload(self, ignore_holdoffs: bool = False) -> bytes:
         """
         Returns an ASCII-encoded byte string containing the command to be sent over-the-wire to a
         worker instructing it to power itself down IF it supports this. Otherwise, raises a
         NotImplementedError which should be caught and followed up with a call to
         power_down_externally()
+
+        @param ignore_holdoffs: if True, always return power-down payload, even during holdoff
         """
         raise NotImplementedError()
+
+    def power_down_inactive(self) -> Optional[bytes]:
+        """
+        Power down an INACTIVE worker, either by returning the proper power-down command payload,
+        or by attempting an external power-down. This is mainly used for powering down misbehaving
+        workers that are connecting to the orchestrator when they shouldn't be.
+
+        @returns ASCII-encoded power-down command, or None if external power-down is required
+        @throws ValueError if this worker is active (i.e., state machine running)
+        """
+        if not self.is_active():
+            try:
+                return self.power_down_payload(ignore_holdoffs=True)
+            except NotImplementedError:
+                self._power_down_externally()
+        else:
+            raise ValueError("Attempted use of power_down_inactive on active {}".format(self))
 
     def reboot_payload(self) -> bytes:
         """
@@ -365,7 +384,6 @@ class BBBWorker(Worker):
         super().__init__(id, pin)
         self._power_up_holdoff = timedelta(seconds=s.POWER_UP_HOLDOFF_BBB)
         self._power_down_holdoff = timedelta(seconds=s.POWER_DOWN_HOLDOFF_BBB)
-        self._instantiated = datetime.now()
 
         with self._pin_lock:
             log.debug("Setting pin %s to output HIGH for %s", self.pin, self)
@@ -389,13 +407,15 @@ class BBBWorker(Worker):
             sleep(s.BTN_PRESS_DELAY)
             GPIO.output(self.pin, GPIO.HIGH)
 
-    def power_down_payload(self) -> bytes:
+    def power_down_payload(self, ignore_holdoffs: bool = False) -> bytes:
         """
         Returns ASCII-encoded bytes for JSON "PWROFF" command IF holdoff period expired. Otherwise
         returns reboot payload.
+
+        @param ignore_holdoffs: if True, always return power-down payload, even during holdoff
         """
         # This func. isn't called by an ActionableIOEvent, so enforce holdoffs ourselves
-        if datetime.now() - self._instantiated > self._power_down_holdoff:
+        if ignore_holdoffs or datetime.now() - self._instantiated > self._power_down_holdoff:
             with self._pin_lock:
                 return (
                     json.dumps(

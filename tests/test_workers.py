@@ -186,6 +186,31 @@ class TestBBBWorker(unittest.TestCase):
         
         # Pre-holdoff
         self.assertEqual(self.w.power_down_payload(), self.w.reboot_payload())
+        # Pre-holdoff w/ holdoffs ignored
+        self.assertNotEqual(
+            self.w.power_down_payload(ignore_holdoffs=True),
+            self.w.reboot_payload()
+        )
         sleep(self.w._power_down_holdoff.seconds)
         # Post-holdoff
         self.assertNotEqual(self.w.power_down_payload(), self.w.reboot_payload())
+
+    def test_power_down_inactive(self):
+        """Tests powering down an inactive BBBWorker"""
+        # Should work regardless of holdoffs
+        # Pre-holdoff
+        self.assertEqual(
+            self.w.power_down_inactive(), 
+            self.w.power_down_payload(ignore_holdoffs=True)
+        )
+        sleep(self.w._power_down_holdoff.seconds)
+        # Post-holdoff
+        self.assertEqual(
+            self.w.power_down_inactive(), 
+            self.w.power_down_payload(ignore_holdoffs=True)
+        )
+
+        # Should fail if active
+        self.w.activate()
+        with self.assertRaises(ValueError):
+            self.w.power_down_inactive()
