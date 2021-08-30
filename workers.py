@@ -504,8 +504,8 @@ class VMWorker(Worker):
         be called by the ActionableIOEvent, which will enforce holdoff periods
         """
         with self._pin_lock:
-            log.debug("Sending pkill to %s", self)
+            log.info("Sending pkill to %s", self)
             nc = Netcat(s.NC_IP, s.NC_PORT)
-            poweroff_cmd = 'pkill -of "' + self.pin + '"\n'
+            poweroff_cmd = 'pkill -9 -f "' + self.pin + '"\n'
             nc.write(poweroff_cmd.encode(encoding="ascii"))
             nc.close()
