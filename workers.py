@@ -487,7 +487,7 @@ class VMWorker(Worker):
                 + " reboot=t quiet loglevel=0 root=/dev/ram0 rootfstype=ramfs rdinit=/sbin/init console=ttyS0"
             )
             kvm_cmd = (
-                ' kvm -M microvm -vga none -no-user-config -nographic -kernel bzImage  -append "'
+                ' kvm -M microvm -m 512M -vga none -no-user-config -nographic -kernel bzImage  -append "'
                 + boot_args
                 + '" -netdev tap,id=net0,script=bin/ifup.sh,downscript=bin/ifdown.sh    -device virtio-net-device,netdev=net0,mac='
                 + mac_addr
