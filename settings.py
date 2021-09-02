@@ -63,4 +63,5 @@ AVAILABLE_WORKERS = {
     "103": ("VMWorker", ":03"),
     "104": ("VMWorker", ":04"),
     "105": ("VMWorker", ":05"),
+    "106": ("VMWorker", ":06"),
 }
