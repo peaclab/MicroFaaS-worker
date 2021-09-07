@@ -255,6 +255,7 @@ class Worker:
                 except NotImplementedError:
                     # Worker only powers down externally, so payload useless here
                     log.debug("%s should be powering off externally", self)
+                    return_payload = b" " # Return something to supress "no response" warning
             elif self._O.POWER_UP.is_set():
                 # Getting a worker request means we don't need POWER_UP to be set
                 self._O.POWER_UP.clear()
