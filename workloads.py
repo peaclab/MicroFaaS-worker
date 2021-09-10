@@ -188,7 +188,7 @@ def fwrite(params):
     try:
         with open(params["path"], "w") as f:
             f.write(params["data"])
-    except EnvironmentError:
+    except:
         print("ERR: Write request failed. Are sysrq's enabled?")
     return
 
@@ -230,12 +230,11 @@ def redis_insert(params):
         return False
 
 
-def psql_inventory():
+def psql_inventory(params):
     try:
         # Establish connection to the postgreSQL database called bostonautosales
         conn = p.connect(
             user="postgres",
-            password="postgres",
             host="192.168.1.156",
             port="5432",
             database="bostonautosales",
@@ -257,6 +256,7 @@ def psql_inventory():
             carCount += car[3]
         retStr += "Total cars in stock: " + str(carCount)
         cur.close()
+        conn.close()
         return retStr
 
     except:
@@ -289,8 +289,8 @@ def psql_purchase(params):
         )
         # Commit new number_in_stock to the database
         conn.commit()
-
         cur.close()
+        conn.close()
         return True
 
     except:
@@ -395,3 +395,4 @@ FUNCTIONS = {
     "upload_kafka": upload_kafka,
     "read_kafka": read_kafka
 }
+
