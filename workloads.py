@@ -255,7 +255,7 @@ def psql_inventory(params):
             retStr += str(car[4]) + ") " + currCar + ": " + str(car[3]) + " in stock    "
             carCount += car[3]
         retStr += "Total cars in stock: " + str(carCount)
-        cur.close()
+        conn.close()
         return retStr
 
     except:
@@ -289,7 +289,7 @@ def psql_purchase(params):
         # Commit new number_in_stock to the database
         conn.commit()
 
-        cur.close()
+        conn.close()
         return True
 
     except:
