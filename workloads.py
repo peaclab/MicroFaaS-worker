@@ -71,34 +71,6 @@ def matmul(params):
     latency = time.time() - start
     return latency
 
-
-# https://github.com/kmu-bigdata/serverless-faas-workbench/blob/master/aws/cpu-memory/linpack/lambda_function.py
-def linpack(params):
-    A = np.array(params["A"], dtype=np.float)
-    B = np.array(params["B"], dtype=np.float)
-    n = A.shape()[0]
-
-    # LINPACK benchmarks
-    ops = (2.0 * n) * n * n / 3.0 + (2.0 * n) * n
-
-    # # Create AxA array of random numbers -0.5 to 0.5
-    # A = random.random_sample((n, n)) - 0.5
-    # B = A.sum(axis=1)
-
-    # # Convert to matrices
-    # A = matrix(A)
-    # B = matrix(B.reshape((n, 1)))
-
-    # Ax = B
-    start = time.time()
-    x = spy.linalg.solve_triangular(A, B)  # Replaced np.linalg.solve()
-    latency = time.time() - start
-
-    mflops = ops * 1e-6 / latency
-
-    return latency
-
-
 # Inspired by https://github.com/kmu-bigdata/serverless-faas-workbench/blob/master/aws/cpu-memory/chameleon/lambda_function.py
 # Adapted from https://www.csestack.org/python-generate-html/
 def html_generation(params):
